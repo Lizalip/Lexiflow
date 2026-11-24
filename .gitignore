@@ -1,22 +1,50 @@
 # Python
 .venv/
+venv/
+/research/env/
 __pycache__/
-*.pyc
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 .ipynb_checkpoints/
 
 # Datasets
 research/data/raw/
 research/data/processed/
+research/data/interim/
 
 # Generated databases
 *.db
 *.sqlite
 *.sqlite3
+*.db-wal
+*.db-shm
+*.db-journal
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite-journal
+*.sqlite3-wal
+*.sqlite3-shm
+*.sqlite3-journal
 
 # Android
 .gradle/
 **/build/
 local.properties
+.idea/
+*.iml
+.kotlin/
+.cxx/
+.externalNativeBuild/
 
 # Secrets
 .env
+.env.local
+
+# Windows Internet Zone sidecars (including copies created in WSL)
+*:Zone.Identifier
+Zone.Identifier
+*.Zone.Identifier
+Thumbs.db
+.DS_Store

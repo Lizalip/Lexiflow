@@ -1,6 +1,8 @@
 package app.lexiflow.ui;
 
 import androidx.lifecycle.SavedStateHandle;
+import java.util.HashMap;
+import java.util.Map;
 import org.junit.Test;
 import static org.junit.Assert.*;
 
@@ -33,10 +35,54 @@ public class FoundationViewModelTest {
         model.setQuery("Ё — EN");
         model.open(Screen.ENTRY);
         model.open(Screen.SETTINGS);
-        FoundationViewModel restored = new FoundationViewModel(state);
+        Map<String, Object> snapshot = new HashMap<>();
+        for (String key : state.keys()) {
+            snapshot.put(key, state.get(key));
+        }
+        FoundationViewModel restored = new FoundationViewModel(new SavedStateHandle(snapshot));
         assertEquals(Screen.SETTINGS, restored.screen());
         restored.back();
         assertEquals(Screen.ENTRY, restored.screen());
         assertEquals("Ё — EN", restored.query());
+    }
+
+    @Test public void eachSectionOpensItsOwnDetail() {
+        assertEquals(Screen.ENTRY, Screen.SEARCH.detail());
+        assertEquals(Screen.COLLECTIONS, Screen.VOCABULARY.detail());
+        assertEquals(Screen.PROGRESS, Screen.REVIEW.detail());
+    }
+
+    @Test public void switchingSectionsPreservesDraftAndBackReturnsToSearch() {
+        FoundationViewModel model = new FoundationViewModel(new SavedStateHandle());
+        String draft = "Ёж — it's time";
+        model.setQuery(draft);
+        model.open(Screen.VOCABULARY);
+        assertEquals(Screen.VOCABULARY, model.screen());
+        model.open(Screen.REVIEW);
+        assertEquals(Screen.REVIEW, model.screen());
+        model.back();
+        assertEquals(Screen.SEARCH, model.screen());
+        assertEquals(draft, model.query());
+    }
+
+    @Test public void settingsReturnsToTheSectionThatOpenedIt() {
+        FoundationViewModel model = new FoundationViewModel(new SavedStateHandle());
+        for (Screen section : new Screen[]{Screen.SEARCH, Screen.VOCABULARY, Screen.REVIEW}) {
+            model.open(section);
+            model.open(Screen.SETTINGS);
+            assertEquals(Screen.SETTINGS, model.screen());
+            model.back();
+            assertEquals(section, model.screen());
+        }
+    }
+
+    @Test public void clearedQueryStaysEmptyOnReturnToSearch() {
+        FoundationViewModel model = new FoundationViewModel(new SavedStateHandle());
+        model.setQuery("draft");
+        assertEquals("draft", model.query());
+        model.setQuery("");
+        model.open(Screen.ENTRY);
+        model.back();
+        assertEquals("", model.query());
     }
 }

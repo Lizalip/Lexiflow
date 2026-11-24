@@ -1,0 +1,32 @@
+<resources>
+    <string name="app_name">LexiFlow</string>
+    <string name="search">Поиск</string>
+    <string name="vocabulary">Мой словарь</string>
+    <string name="review">Повторение</string>
+    <string name="settings">Настройки</string>
+    <string name="entry">Словарная статья</string>
+    <string name="collections">Подборки</string>
+    <string name="progress">Прогресс</string>
+    <string name="dictionary">Словарь</string>
+    <string name="pair">Английский ↔ Русский</string>
+    <string name="query_hint">Слово или выражение</string>
+    <string name="no_corpus">Словарь пока пуст</string>
+    <string name="no_corpus_body">Здесь появятся статьи после подключения словарной базы.</string>
+    <string name="no_entry">Статья не выбрана</string>
+    <string name="no_entry_body">Здесь будут значения и примеры употребления выбранного слова.</string>
+    <string name="no_words">Нет сохранённых слов</string>
+    <string name="no_words_body">Здесь соберутся слова и выражения, которые вы сохраните из словаря.</string>
+    <string name="no_collections">Пока нет подборок</string>
+    <string name="no_collections_body">В подборках можно будет объединять сохранённые слова по темам.</string>
+    <string name="no_review">Нет карточек для повторения</string>
+    <string name="no_review_body">Карточки для занятий появятся после добавления слов в личный словарь.</string>
+    <string name="no_progress">Пока нет занятий</string>
+    <string name="no_progress_body">После первых повторений здесь появится история занятий.</string>
+    <string name="no_settings">Языковая пара</string>
+    <string name="settings_body">Приложение работает локально. Настраиваемых параметров пока нет.</string>
+    <string name="open_entry">Посмотреть экран статьи</string>
+    <string name="open_collections">Открыть подборки</string>
+    <string name="open_progress">Посмотреть прогресс</string>
+    <string name="back">Назад</string>
+    <string name="no_installed_dictionary">Словарная база не подключена</string>
+</resources>

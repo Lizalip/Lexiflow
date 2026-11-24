@@ -1,0 +1,21 @@
+<resources>
+    <style name="Theme.LexiFlow" parent="Theme.Material3.Light.NoActionBar">
+        <item name="colorPrimary">@color/blue</item>
+        <item name="colorSecondary">@color/ink</item>
+        <item name="colorSurface">@color/paper</item>
+        <item name="colorOnSurface">@color/ink</item>
+        <item name="colorSecondaryContainer">@color/mint</item>
+        <item name="colorOnSecondaryContainer">@color/ink</item>
+        <item name="android:windowBackground">@color/paper</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+        <item name="android:fontFamily">sans-serif</item>
+    </style>
+    <style name="PageHeading" parent="TextAppearance.Material3.HeadlineLarge">
+        <item name="android:fontFamily">sans-serif-medium</item>
+        <item name="android:textColor">@color/ink</item>
+    </style>
+    <style name="PanelHeading" parent="TextAppearance.Material3.TitleLarge">
+        <item name="android:textColor">@color/ink</item>
+    </style>
+</resources>

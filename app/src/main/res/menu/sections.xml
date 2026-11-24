@@ -1,0 +1,5 @@
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:id="@+id/search" android:icon="@drawable/ic_search" android:title="@string/search" />
+    <item android:id="@+id/vocabulary" android:icon="@drawable/ic_vocabulary" android:title="@string/vocabulary" />
+    <item android:id="@+id/review" android:icon="@drawable/ic_review" android:title="@string/review" />
+</menu>

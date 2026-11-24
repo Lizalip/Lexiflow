@@ -1,0 +1,8 @@
+<resources>
+    <color name="paper">#F7F8F4</color>
+    <color name="ink">#17283D</color>
+    <color name="mint">#C8F1E2</color>
+    <color name="blue">#335CF0</color>
+    <color name="coral">#D87968</color>
+    <color name="secondary_text">#485866</color>
+</resources>

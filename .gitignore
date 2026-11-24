@@ -1,0 +1,22 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Datasets
+research/data/raw/
+research/data/processed/
+
+# Generated databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Android
+.gradle/
+**/build/
+local.properties
+
+# Secrets
+.env

@@ -5,12 +5,48 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from research_capacity import capacity
+from research_cefr import compare as compare_cefr, parse_rows
 from research_corpus_audit import flags
 from research_evaluation import HOLDOUT, REFERENCE, probe_set, reference_at_cutoff, summarize
 from research_upgrade import differences
+from research_reverse_aliases import stress_key
+from research_tatoeba import pairs, token_phrase
 
 
 class ResearchAnalysisTest(unittest.TestCase):
+    def test_tatoeba_retains_only_direct_attributed_pairs(self):
+        def row(identifier,language):
+            return dict(id=identifier,lang=language,text='fixture',owner='fixture-author',
+                        license='CC BY 2.0 FR',is_unapproved=False)
+        source = dict(row(1,'eng'),translations=[
+            dict(row(2,'rus'),is_direct=True),dict(row(3,'rus'),is_direct=False),
+            dict(row(4,'rus'),is_direct=True,owner=None),
+            dict(row(5,'rus'),is_direct=True,license='unknown'),
+        ])
+        (en,ru), = list(pairs(dict(data=[source])))
+        self.assertEqual((en['id'],ru['id']),(1,2))
+        self.assertIn('/2.0/fr/',ru['terms'])
+        self.assertFalse(token_phrase(['ice'],['nice']))
+        self.assertTrue(token_phrase(['two','words'],['these','two','words']))
+
+    def test_reverse_alias_only_removes_russian_stress_marks(self):
+        self.assertEqual(stress_key('  Ё́Ж   Кра́й  '),'ёж край')
+        self.assertEqual(stress_key('café'),'café')
+        self.assertNotEqual(stress_key('ёлка'),stress_key('елка'))
+        self.assertNotEqual(stress_key('стои́т'),stress_key('стоить'))
+
+    def test_cefr_requires_pos_and_keeps_ambiguous_lemma_levels(self):
+        rows = list(parse_rows([('headword','pos','CEFR'),('word','noun','A1'),('word','noun','B2'),
+                                ('word','verb','A2'),('verb','verb','B1')]))
+        with sqlite3.connect(':memory:') as db:
+            db.execute('CREATE TABLE entry(search_key,pos)')
+            db.executemany('INSERT INTO entry VALUES (?,?)',[('word','n'),('verb','v')])
+            report = compare_cefr(db,rows)
+        self.assertEqual(report['multiple_levels_on_same_lemma_pos'],1)
+        self.assertEqual(report['unambiguous_candidate_levels'],{'B1':1})
+        self.assertEqual(report['unmatched_rows'],{'headword_only':1})
+        self.assertEqual(report['assigned_sense_levels'],0)
+
     def test_heldout_has_no_overlap_and_covers_reference_probes(self):
         probes = dict((text,category) for category,text in probe_set())
         self.assertEqual(len(probes),264)

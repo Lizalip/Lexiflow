@@ -34,6 +34,8 @@ def flags(text):
         result.append('over_48_codepoints')
     if any(unicodedata.category(c).startswith('P') and c not in PLAIN_PUNCTUATION for c in text):
         result.append('unusual_punctuation')
+    if '[[' in text or ']]' in text:
+        result.append('wiki_markup')
     if any(unicodedata.category(c).startswith('C') for c in text):
         result.append('control_or_format_character')
     if text != text.strip() or any(c in text for c in ('\ufffd','\x00')):
@@ -110,7 +112,10 @@ def audit(db,manifest,frequency,quota):
         entries_with_source_notes=len(note_ids), distinct_normalized_translations=scalar(db,'SELECT count(DISTINCT search_key) FROM translation'),
         same_sense_repeated_normalized_wordings=duplicate_normalized,
         same_headword_pos_translation_set_clusters=sum(n>1 for n in identical.values()),
-        translation_risk_counts=dict(risks), sampling_frame={name:len(rows) for name,rows in buckets.items()},
+        translation_risk_counts=dict(risks),
+        translation_rows_with_combining_stress=scalar(db,"SELECT count(*) FROM translation WHERE instr(wording,char(769))>0"),
+        translation_rows_with_commas=scalar(db,"SELECT count(*) FROM translation WHERE instr(wording,',')>0"),
+        sampling_frame={name:len(rows) for name,rows in buckets.items()},
         selection_counts=dict(Counter(row['stratum'] for row in sample)),
         multiword_headwords=scalar(db,"SELECT count(DISTINCT search_key) FROM entry WHERE instr(search_key,' ')>0"),
         expression_headwords=scalar(db,"SELECT count(DISTINCT search_key) FROM entry WHERE pos IN ('phraseologicalUnit','proverb')"),

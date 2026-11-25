@@ -18,7 +18,7 @@ function snapshot() {
   return {version: 1, batch, reviewer: element("reviewer").value, rows};
 }
 
-function restore(draft) {
+function restore(draft, merge = false) {
   const seen = new Set();
   if (!draft || draft.version !== 1 || draft.batch !== batch || typeof draft.reviewer !== "string"
       || draft.reviewer.length > 200 || !Array.isArray(draft.rows) || draft.rows.length > controls.length) {
@@ -32,6 +32,22 @@ function restore(draft) {
       throw new Error("В черновике обнаружена некорректная строка");
     }
     seen.add(row.index);
+  }
+  if (merge) {
+    const current = snapshot();
+    if (current.reviewer && draft.reviewer && current.reviewer !== draft.reviewer) {
+      throw new Error("Черновик содержит другое имя редактора");
+    }
+    const combined = new Map(current.rows.map(row => [row.index, row]));
+    for (const row of draft.rows) {
+      const existing = combined.get(row.index);
+      if (existing && (existing.kind !== row.kind || existing.translation !== row.translation
+          || existing.reason !== row.reason)) {
+        throw new Error("В этой строке уже есть другое локальное решение");
+      }
+      combined.set(row.index, row);
+    }
+    draft = {...draft, reviewer: current.reviewer || draft.reviewer, rows: [...combined.values()]};
   }
   for (const {choice, text, reason} of controls) {
     choice.value = "";
@@ -50,12 +66,15 @@ function restore(draft) {
 function update(persist = false) {
   const state = element("state").value;
   const priority = element("priority").value;
+  const assessment = element("assessment").value;
   const query = element("query").value.trim().toLocaleLowerCase();
   let visible = 0;
   const draft = snapshot();
   const drafted = new Set(draft.rows.map(row => row.index));
   controls.forEach(({article, text}, index) => {
     article.hidden = (priority && priority !== article.dataset.priority)
+      || (assessment === "corrections" && article.dataset.suggestion !== "true")
+      || (assessment && assessment !== "corrections" && assessment !== article.dataset.category)
       || (state === "pending" && drafted.has(index)) || (state === "draft" && !drafted.has(index))
       || (query && !article.textContent.toLocaleLowerCase().includes(query)
          && !text.value.toLocaleLowerCase().includes(query));
@@ -81,13 +100,13 @@ function download(content, filename) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-document.addEventListener("input", event => update(!["query", "priority", "state", "open-draft"].includes(event.target.id)));
+document.addEventListener("input", event => update(!["query", "priority", "assessment", "state", "open-draft"].includes(event.target.id)));
 element("save-draft").onclick = () => download(JSON.stringify(snapshot(), null, 2), "lexiflow-review-session.json");
 element("open-draft").onchange = async event => {
   try {
     const file = event.target.files[0];
     if (!file || file.size > 3 * 1024 * 1024) throw new Error("Выберите черновик размером до 3 МиБ");
-    restore(JSON.parse(await file.text()));
+    restore(JSON.parse(await file.text()), true);
     update(true);
     element("feedback").textContent = "Черновик восстановлен";
   } catch (failure) {

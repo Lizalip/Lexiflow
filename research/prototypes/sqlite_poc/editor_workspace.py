@@ -19,6 +19,39 @@ DATA = Path(__file__).resolve().parents[2]/'data'
 SEED = 'lexiflow-multiword-v1'
 FUNCTION_WORDS = frozenset('a an the of to for with at by in on from as and or but if than it '
                            'he she they we you not no can may will would should that which who'.split())
+ASSESSMENT_GROUPS = {
+    'plausible':'Предварительно подходят', 'clarification':'Уточнение формулировки',
+    'multiple':'Несколько эквивалентов', 'meaning-mismatch':'Расхождение значений',
+    'unrelated-context':'Контекст другого значения', 'pos-mismatch':'Расхождение части речи',
+    'specialized':'Редкое или специальное значение', 'proper-name':'Имена и названия',
+    'form-reference':'Отсылка к форме', 'insufficient':'Недостаточно данных',
+}
+
+
+def attach_assessments(rows, path):
+    by_key = {tuple(row[key] for key in IDENTITY):row for row in rows}
+    assessments = {}
+    keys = set(IDENTITY) | {'category','reason','suggestion'}
+    with path.open(encoding='utf-8-sig') as stream:
+        for line, text in enumerate(stream,1):
+            record = json.loads(text)
+            if (not isinstance(record,dict) or set(record) != keys
+                    or any(not isinstance(record[key],str) or not record[key].strip()
+                           for key in (*IDENTITY,'reason','category'))
+                    or record['category'] not in ASSESSMENT_GROUPS
+                    or (record['suggestion'] is not None
+                        and (not isinstance(record['suggestion'],str) or not record['suggestion'].strip()))):
+                raise ValueError(f'invalid preliminary assessment at line {line}')
+            identity = tuple(record[key] for key in IDENTITY)
+            if identity not in by_key or identity in assessments:
+                raise ValueError(f'unknown or repeated source key at line {line}')
+            assessments[identity] = {key:record[key] for key in ('category','reason','suggestion')}
+    for identity,row in by_key.items():
+        assessment = assessments.get(identity, {})
+        row.update(assessment_category=assessment.get('category',''),
+                   assessment_reason=assessment.get('reason',''),
+                   preliminary_suggestion=assessment.get('suggestion'))
+    return dict(Counter(value['category'] for value in assessments.values()))
 
 
 def review_signals(task, context, priority):
@@ -61,10 +94,13 @@ def load_pilot(db, path):
             alternatives = [value for value, in db.execute(
                 "SELECT body FROM gloss WHERE sense_id=? AND role='source_gloss' ORDER BY position,id",
                 (row['sense_id'],))]
+            pronunciations = [ipa for ipa, in db.execute(
+                "SELECT DISTINCT ipa FROM pronunciation WHERE entry_id=? AND ipa<>'' ORDER BY ipa",
+                (row['entry_id'],))]
             yield {**dict(zip(IDENTITY,keys)), 'headword':row['headword'],'pos':row['pos'],
                    'candidate':row['gloss'],'source':row['source'],'translation_rights':row['rights'],
                    'context':context,'alternatives':row['gloss_count'],'priority':ranked['review_priority'],
-                   'source_alternatives':alternatives,'source_url':original.get('source_url',''),
+                   'source_alternatives':alternatives,'source_ipa':pronunciations,'source_url':original.get('source_url',''),
                    'license_id':original.get('license_id',''),'terms_url':original.get('terms_url',''),
                    'attribution_note':original.get('source',''),
                    'audit_priority':'specialist' if issues and ranked['review_priority']=='standard' else ranked['review_priority'],
@@ -99,10 +135,17 @@ def write_html(path, rows):
         provenance = html.escape(' | '.join(row.get(key,'') for key in ('source_url','license_id','terms_url')))
         alternatives = ' · '.join(html.escape(value) for value in row.get('source_alternatives',[]))
         issues = ', '.join(html.escape(reason) for reason in row.get('issues',[]))
-        cards.append(f"""<article data-index="{index}" data-priority="{priority}"><h3>{html.escape(row['headword'])} ·
+        category = row.get('assessment_category','')
+        assessment = html.escape(ASSESSMENT_GROUPS.get(category,'—')+' · '+row.get('assessment_reason',''))
+        suggestion = html.escape(row.get('preliminary_suggestion') or '—')
+        ipa = ' · '.join(html.escape(value) for value in row.get('source_ipa',[]))
+        cards.append(f"""<article data-index="{index}" data-priority="{priority}" data-category="{html.escape(category)}"
+ data-suggestion="{str(bool(row.get('preliminary_suggestion'))).lower()}"><h3>{html.escape(row['headword'])} ·
  {html.escape(row['pos'] or '—')}</h3><p>Исходный перевод: <strong>{candidate}</strong></p>{context}
  <p><small>{detail}<br>Sense ID: {html.escape(row['sense_id'])}<br>{provenance}<br>
- Варианты: {alternatives or candidate}<br>Сигналы: {issues or '—'}</small></p>
+ Варианты: {alternatives or candidate}<br>IPA источника: {ipa or '—'}<br>Сигналы: {issues or '—'}</small></p>
+ <p>Предварительная оценка: {assessment}<br>Предлагаемое уточнение: {suggestion}<br>
+ Одобрение контекста в этой очереди не фиксируется.</p>
  <label>Черновик решения <select><option value="">Ожидает решения</option>
  <option value="candidate_translation">Предложить перевод</option>
  <option value="unsuitable">Предложить отклонение</option></select></label>
@@ -111,6 +154,7 @@ def write_html(path, rows):
     if cards: cards.append('</section>')
     keys = [{key:row[key] for key in IDENTITY} for row in rows]
     embedded = json.dumps(keys,ensure_ascii=True).replace('<','\\u003c')
+    categories = ''.join(f'<option value="{code}">{label}</option>' for code,label in ASSESSMENT_GROUPS.items())
     with path.open('x',encoding='utf-8') as stream:
         stream.write("""<!doctype html><html lang="ru"><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'">
@@ -123,10 +167,12 @@ label{display:block;margin:.5rem 0}small{overflow-wrap:anywhere}textarea,input{m
 <option value="standard">Стандартные</option><option value="exclude">Исключённые</option></select></label>
 <label>Состояние <select id="state"><option value="">Все</option><option value="pending">Без предложения</option>
 <option value="draft">Есть черновик</option></select></label><p id="counts" role="status"></p>
+<label>Предварительная оценка <select id="assessment"><option value="">Все</option>
+<option value="corrections">Есть уточнение перевода</option><!-- categories --></select></label>
 <label>Имя редактора <input id="reviewer" maxlength="200" required></label><button id="export">Скачать предложения JSONL</button>
 <button id="save-draft">Сохранить сессию</button>
 <label>Восстановить сессию <input type="file" id="open-draft" accept=".json"></label>
-<p id="feedback" role="status"></p>""")
+<p id="feedback" role="status"></p>""".replace('<!-- categories -->',categories))
         stream.write(''.join(cards))
         stream.write(f'<script type="application/json" id="identity">{embedded}</script>')
         batch = hashlib.sha256(embedded.encode()).hexdigest()
@@ -249,6 +295,7 @@ def main():
     parser.add_argument('--freedict-archive',type=Path)
     parser.add_argument('--frequency-archive',type=Path)
     parser.add_argument('--frequency-staging',type=Path)
+    parser.add_argument('--assessments',type=Path,help='Local source-keyed JSONL of advisory assessments')
     args = parser.parse_args()
     if bool(args.frequency_archive) != bool(args.frequency_staging):
         parser.error('frequency archive and staging must be supplied together')
@@ -267,6 +314,9 @@ def main():
                      unique_child_context=sum(len(row['context'])==1 and
                                               row['context'][0]['relationship']=='direct-child' for row in pilot),
                      release=readiness(free),human_decisions_created=0)
+        if args.assessments:
+            audit['assessment_categories'] = attach_assessments(pilot,args.assessments)
+            audit['proposed_corrections'] = sum(bool(row['preliminary_suggestion']) for row in pilot)
         if args.frequency_archive:
             with connect(args.frequency_staging,'ro') as frequent:
                 manifest = json.loads(frequent.execute(
@@ -282,6 +332,16 @@ def main():
     args.output.mkdir()
     write_csv(args.output/'freedict-context.csv',pilot)
     write_html(args.output/'freedict-review.html',pilot)
+    if args.assessments:
+        first_review = [row for row in pilot if row['assessment_category']=='plausible'][:40]
+        if first_review:
+            write_csv(args.output/'first-review.csv',first_review)
+        audit['first_review_rows'] = len(first_review)
+        expanded = [row for category in ('plausible','clarification')
+                    for row in pilot if row['assessment_category'] == category][:100]
+        if expanded:
+            write_csv(args.output/'candidate-100.csv',expanded)
+        audit['expanded_review_rows'] = len(expanded)
     write_csv(args.output/'multiword-review.csv',phrases)
     priority_phrases = [row for row in phrases if row['stratum'] in ('source-phraseology','multiword-verb-review')
                         and row['rights'] == 'pending']

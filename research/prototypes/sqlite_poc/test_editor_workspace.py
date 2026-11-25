@@ -1,15 +1,35 @@
 import tempfile
 import unittest
 import sqlite3
+import json
 from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
-from editor_workspace import diagnostic_alignment, write_html
+from editor_workspace import attach_assessments, diagnostic_alignment, write_html
 from prototype import create_database
 
 
 class WorkspaceTest(unittest.TestCase):
+    def test_preliminary_assessment_requires_exact_unique_source_keys(self):
+        identity = dict(entry_id='e',sense_id='s',snapshot_sha256='a'*64,locator='entry/1/sense/0')
+        decision = dict(identity,category='clarification',reason='fixture rationale',suggestion='fixture')
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp)/'assessment.jsonl'
+            row = dict(identity,status='pending',translation_rights='pending')
+            path.write_text(json.dumps(decision)+'\n'+json.dumps(dict(decision,locator='wrong')),encoding='utf-8')
+            with self.assertRaisesRegex(ValueError,'unknown or repeated'):
+                attach_assessments([row],path)
+            self.assertNotIn('assessment_category',row)
+            path.write_text((json.dumps(decision)+'\n')*2,encoding='utf-8')
+            with self.assertRaisesRegex(ValueError,'unknown or repeated'):
+                attach_assessments([row],path)
+            path.write_text(json.dumps(decision),encoding='utf-8')
+            self.assertEqual({'clarification':1},attach_assessments([row],path))
+            self.assertEqual('fixture',row['preliminary_suggestion'])
+            self.assertEqual('pending',row['status'])
+            self.assertEqual('pending',row['translation_rights'])
+
     def test_imported_content_is_escaped_and_export_stays_proposed(self):
         attack = '</script><img src=x onerror=alert(1)>'
         row = dict(entry_id=attack,sense_id='s',snapshot_sha256='a'*64,locator=attack,

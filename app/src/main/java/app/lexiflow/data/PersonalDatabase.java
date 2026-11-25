@@ -80,6 +80,13 @@ public abstract class PersonalDatabase extends RoomDatabase {
     @Dao
     public abstract static class Library {
         @Query("SELECT * FROM saved ORDER BY id DESC") public abstract List<Saved> saved();
+        @Query("SELECT * FROM saved ORDER BY id DESC LIMIT :limit OFFSET :offset")
+        public abstract List<Saved> savedPage(int limit,int offset);
+        @Query("SELECT count(*) FROM saved") public abstract int savedCount();
+        @Query("SELECT saved.* FROM members JOIN saved ON saved.id=members.savedId "
+                + "WHERE members.collectionId=:collection ORDER BY members.savedId DESC LIMIT :limit OFFSET :offset")
+        public abstract List<Saved> collectionPage(long collection,int limit,int offset);
+        @Query("SELECT count(*) FROM members WHERE collectionId=:collection") public abstract int collectionSize(long collection);
         @Query("SELECT * FROM collections ORDER BY name,id") public abstract List<Collection> collections();
         @Query("SELECT * FROM members ORDER BY collectionId,savedId") public abstract List<Member> memberships();
         @Insert(onConflict = OnConflictStrategy.IGNORE) public abstract long save(Saved item);

@@ -1,17 +1,17 @@
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
-    android:orientation="vertical" android:padding="24dp"
+    android:orientation="vertical" android:padding="@dimen/space_large"
     android:layout_width="match_parent" android:layout_height="wrap_content">
 
     <TextView android:id="@+id/title" android:textAppearance="@style/PageHeading"
         android:accessibilityHeading="true" android:layout_width="match_parent" android:layout_height="wrap_content" />
 
     <TextView android:id="@+id/pair" android:text="@string/pair" android:textAppearance="?attr/textAppearanceTitleMedium"
-        android:layout_marginTop="8dp" android:layout_width="match_parent" android:layout_height="wrap_content" />
+        android:layout_marginTop="@dimen/space_small" android:layout_width="match_parent" android:layout_height="wrap_content" />
 
     <com.google.android.material.textfield.TextInputLayout
         android:id="@+id/query_box" android:layout_width="match_parent" android:layout_height="wrap_content"
-        android:layout_marginTop="24dp" android:hint="@string/query_hint"
+        android:layout_marginTop="@dimen/space_large" android:hint="@string/query_hint"
         app:startIconDrawable="@drawable/ic_search" app:endIconMode="clear_text"
         style="@style/Widget.Material3.TextInputLayout.OutlinedBox">
         <com.google.android.material.textfield.TextInputEditText
@@ -25,22 +25,22 @@
         style="@style/Widget.Material3.Button.TextButton" />
 
     <com.google.android.material.card.MaterialCardView
-        android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="24dp"
-        app:cardCornerRadius="20dp" app:cardBackgroundColor="@color/mint" app:strokeWidth="0dp">
+        android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="@dimen/space_large"
+        app:cardCornerRadius="@dimen/panel_corner_radius" app:cardBackgroundColor="@color/mint" app:strokeWidth="0dp">
         <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
-            android:orientation="vertical" android:padding="24dp">
+            android:orientation="vertical" android:padding="@dimen/space_large">
             <View android:layout_width="32dp" android:layout_height="4dp" android:background="@color/coral" />
             <TextView android:id="@+id/panel_title" android:layout_width="match_parent" android:layout_height="wrap_content"
-                android:layout_marginTop="16dp" android:textAppearance="@style/PanelHeading" />
+                android:layout_marginTop="@dimen/space_medium" android:textAppearance="@style/PanelHeading" />
             <TextView android:id="@+id/body" android:layout_width="match_parent" android:layout_height="wrap_content"
-                android:layout_marginTop="8dp" android:textAppearance="?attr/textAppearanceBodyLarge"
+                android:layout_marginTop="@dimen/space_small" android:textAppearance="?attr/textAppearanceBodyLarge"
                 android:textColor="@color/secondary_text" />
         </LinearLayout>
     </com.google.android.material.card.MaterialCardView>
 
     <com.google.android.material.button.MaterialButton
         android:id="@+id/action" android:layout_width="wrap_content" android:layout_height="wrap_content"
-        android:layout_marginTop="16dp" style="@style/Widget.Material3.Button.TonalButton" />
+        android:layout_marginTop="@dimen/space_medium" style="@style/Widget.Material3.Button.TonalButton" />
 
     <LinearLayout android:id="@+id/results" android:orientation="vertical"
         android:layout_width="match_parent" android:layout_height="wrap_content" />

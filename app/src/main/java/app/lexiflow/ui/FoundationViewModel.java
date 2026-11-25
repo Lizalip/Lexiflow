@@ -30,9 +30,10 @@ public final class FoundationViewModel extends ViewModel {
     private volatile int request;
     private volatile boolean disposed;
     final MutableLiveData<DictionaryView> dictionaryView = new MutableLiveData<>();
-    record PersonalView(List<PersonalDatabase.Saved> saved, List<PersonalDatabase.Collection> collections,
-                        List<PersonalDatabase.Member> memberships, PersonalDatabase.Exercise exercise,
-                        int cards, int due, int reviewed, int successful) {}
+    static final int PERSONAL_PAGE_SIZE = 50;
+    record PersonalView(Screen screen,long collection,int page,int rowCount,int savedCount,
+                        List<PersonalDatabase.Saved> saved, List<PersonalDatabase.Collection> collections,
+                        PersonalDatabase.Exercise exercise,int cards,int due,int reviewed,int successful) {}
     final MutableLiveData<PersonalView> personalView = new MutableLiveData<>();
     final MutableLiveData<Boolean> personalError = new MutableLiveData<>();
     final MutableLiveData<Integer> notice = new MutableLiveData<>();
@@ -99,16 +100,36 @@ public final class FoundationViewModel extends ViewModel {
 
     void changePersonal(Consumer<PersonalDatabase.Library> change) {
         if (worker == null) return;
+        Screen target = screen();
+        long collection = collection();
+        int requestedPage = personalPage(target);
         worker.execute(() -> {
             try {
                 PersonalDatabase.Library library = personal.library();
                 change.accept(library);
                 long now = System.currentTimeMillis();
-                var snapshot = new PersonalView(library.saved(),library.collections(),library.memberships(),
-                        library.next(now),library.cardCount(),library.dueCount(now),library.reviewCount(),library.successCount());
+                int savedCount = target == Screen.VOCABULARY || target == Screen.PROGRESS ? library.savedCount() : 0;
+                int rowCount = target == Screen.VOCABULARY ? savedCount
+                        : target == Screen.COLLECTIONS && collection != 0 ? library.collectionSize(collection) : 0;
+                int page = Math.min(requestedPage, Math.max(0,(rowCount-1)/PERSONAL_PAGE_SIZE));
+                int offset = page * PERSONAL_PAGE_SIZE;
+                List<PersonalDatabase.Saved> saved = target == Screen.VOCABULARY
+                        ? library.savedPage(PERSONAL_PAGE_SIZE,offset)
+                        : target == Screen.COLLECTIONS && collection != 0
+                        ? library.collectionPage(collection,PERSONAL_PAGE_SIZE,offset) : Collections.emptyList();
+                var snapshot = new PersonalView(target,collection,page,rowCount,savedCount,saved,
+                        target == Screen.VOCABULARY || target == Screen.COLLECTIONS || target == Screen.PROGRESS
+                                ? library.collections() : Collections.emptyList(),
+                        target == Screen.REVIEW ? library.next(now) : null,
+                        target == Screen.PROGRESS ? library.cardCount() : 0,
+                        target == Screen.PROGRESS ? library.dueCount(now) : 0,
+                        target == Screen.PROGRESS ? library.reviewCount() : 0,
+                        target == Screen.PROGRESS ? library.successCount() : 0);
                 main.post(() -> {
-                    if (disposed) return;
-                    answerShown = false;
+                    if (disposed || target != screen() || collection != collection()
+                            || requestedPage != personalPage(target)) return;
+                    if (target == Screen.REVIEW) answerShown = false;
+                    state.set(pageKey(target),page);
                     personalError.setValue(false);
                     personalView.setValue(snapshot);
                 });
@@ -163,7 +184,23 @@ public final class FoundationViewModel extends ViewModel {
         Long id = state.get("collection");
         return id == null ? 0 : id;
     }
-    void selectCollection(long id) { state.set("collection",id); }
+    void selectCollection(long id) {
+        state.set("collection",id);
+        state.set(pageKey(Screen.COLLECTIONS),0);
+        refreshPersonal();
+    }
+
+    private static String pageKey(Screen screen) { return "personalPage." + screen.name(); }
+
+    private int personalPage(Screen screen) {
+        Integer page = state.get(pageKey(screen));
+        return page == null ? 0 : page;
+    }
+
+    void changePersonalPage(int page) {
+        state.set(pageKey(screen()),page);
+        refreshPersonal();
+    }
     boolean answerShown() { return answerShown; }
     void revealAnswer() { answerShown = true; }
     void grade(PersonalDatabase.Exercise exercise,int rating) {

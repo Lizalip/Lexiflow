@@ -32,6 +32,7 @@ public final class MainActivity extends AppCompatActivity {
     private BottomNavigationView navigation;
     private TextInputEditText query;
     private OfflinePronunciation pronunciation;
+    private Integer restoredPersonalScroll;
     private final OnBackPressedCallback back = new OnBackPressedCallback(false) {
         @Override public void handleOnBackPressed() {
             model.back();
@@ -53,6 +54,9 @@ public final class MainActivity extends AppCompatActivity {
 
         model = new ViewModelProvider(this).get(FoundationViewModel.class);
         model.connect(this);
+        if (savedState != null && savedState.containsKey("personalScroll")) {
+            restoredPersonalScroll = savedState.getInt("personalScroll");
+        }
         toolbar = findViewById(R.id.toolbar);
         navigation = findViewById(R.id.navigation);
         query = findViewById(R.id.query);
@@ -94,6 +98,7 @@ public final class MainActivity extends AppCompatActivity {
 
     private void open(Screen screen) {
         rememberSearchPosition();
+        restoredPersonalScroll = null;
         getSystemService(InputMethodManager.class).hideSoftInputFromWindow(query.getWindowToken(), 0);
         query.clearFocus();
         model.open(screen);
@@ -275,7 +280,7 @@ public final class MainActivity extends AppCompatActivity {
         LinearLayout rows = findViewById(R.id.results);
         rows.removeAllViews();
         var state = model.personalView.getValue();
-        if (state == null) return;
+        if (state == null || state.screen() != screen || state.collection() != model.collection()) return;
         TextView heading = findViewById(R.id.panel_title);
         TextView body = findViewById(R.id.body);
         heading.setText(screen.heading);
@@ -284,8 +289,9 @@ public final class MainActivity extends AppCompatActivity {
             case VOCABULARY -> {
                 if (!state.saved().isEmpty()) {
                     heading.setText(R.string.saved_heading);
-                    body.setText(getString(R.string.saved_count,state.saved().size()));
+                    body.setText(getString(R.string.saved_count,state.savedCount()));
                 }
+                addPageControls(rows,state);
                 for (var item : state.saved()) addAction(rows,savedLabel(item),() -> savedMenu(item,state));
             }
             case COLLECTIONS -> {
@@ -306,12 +312,18 @@ public final class MainActivity extends AppCompatActivity {
             }
             case REVIEW -> renderExercise(rows,heading,body,state.exercise());
             case PROGRESS -> {
-                if (state.saved().isEmpty() && state.collections().isEmpty() && state.reviewed() == 0) return;
+                if (state.savedCount() == 0 && state.collections().isEmpty() && state.reviewed() == 0) return;
                 heading.setText(R.string.progress);
-                body.setText(getString(R.string.stats,state.saved().size(),state.collections().size(),state.cards(),
+                body.setText(getString(R.string.stats,state.savedCount(),state.collections().size(),state.cards(),
                         state.due(),state.reviewed(),state.successful(),state.reviewed() - state.successful()));
             }
             default -> { }
+        }
+        if (restoredPersonalScroll != null && (screen == Screen.VOCABULARY || screen == Screen.COLLECTIONS)) {
+            ScrollView scroll = findViewById(R.id.scroll);
+            int position = restoredPersonalScroll;
+            restoredPersonalScroll = null;
+            scroll.post(() -> scroll.scrollTo(0,position));
         }
     }
 
@@ -407,14 +419,32 @@ public final class MainActivity extends AppCompatActivity {
         heading.setText(collection.name);
         body.setText(R.string.collection_items);
         addAction(rows,getString(R.string.rename_collection),() -> collectionName(collection));
+        addPageControls(rows,state);
         for (var item : state.saved()) {
-            if (state.memberships().stream().noneMatch(m -> m.collectionId == collection.id && m.savedId == item.id)) continue;
             addAction(rows,savedLabel(item),() -> new MaterialAlertDialogBuilder(this).setTitle(item.spelling)
                     .setNegativeButton(android.R.string.cancel,null)
                     .setPositiveButton(R.string.open_saved,(d,w) -> { model.openSaved(item.entryId,item.senseId); render(); })
                     .setNeutralButton(R.string.remove_from_collection,(d,w) ->
                             model.changePersonal(library -> library.removeMember(collection.id,item.id))).show());
         }
+    }
+
+    private void addPageControls(LinearLayout rows,FoundationViewModel.PersonalView state) {
+        int size = FoundationViewModel.PERSONAL_PAGE_SIZE;
+        if (state.rowCount() <= size) return;
+        TextView position = new TextView(this);
+        position.setText(getString(R.string.personal_page_range,state.page()*size+1,
+                Math.min((state.page()+1)*size,state.rowCount()),state.rowCount()));
+        rows.addView(position);
+        if (state.page() > 0) addAction(rows,getString(R.string.personal_previous_page),
+                () -> openPersonalPage(state.page()-1));
+        if ((state.page()+1)*size < state.rowCount()) addAction(rows,getString(R.string.personal_next_page),
+                () -> openPersonalPage(state.page()+1));
+    }
+
+    private void openPersonalPage(int page) {
+        model.changePersonalPage(page);
+        ((ScrollView) findViewById(R.id.scroll)).scrollTo(0,0);
     }
 
     private void addCard(PersonalDatabase.Saved item, boolean reverse) {
@@ -442,11 +472,10 @@ public final class MainActivity extends AppCompatActivity {
     }
 
     private void addAction(LinearLayout rows, CharSequence label, Runnable action) {
-        MaterialButton button = new MaterialButton(this);
+        MaterialButton button = (MaterialButton) getLayoutInflater().inflate(R.layout.action_row,rows,false);
         button.setText(label);
-        button.setMinimumHeight((int) (48 * getResources().getDisplayMetrics().density));
         button.setOnClickListener(v -> action.run());
-        rows.addView(button, new LinearLayout.LayoutParams(-1, -2));
+        rows.addView(button);
     }
 
     private void rememberSearchPosition() {
@@ -459,6 +488,9 @@ public final class MainActivity extends AppCompatActivity {
 
     @Override protected void onSaveInstanceState(Bundle outState) {
         rememberSearchPosition();
+        if (model.screen() == Screen.VOCABULARY || model.screen() == Screen.COLLECTIONS) {
+            outState.putInt("personalScroll",findViewById(R.id.scroll).getScrollY());
+        }
         super.onSaveInstanceState(outState);
     }
 

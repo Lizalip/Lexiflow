@@ -53,6 +53,31 @@ public class NavigationTest {
         }
     }
 
+    @Test public void reverseSearchOpensSenseAndRestoresResultsOnBack() throws InterruptedException {
+        try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
+            awaitDictionary(scenario);
+            boolean[] synthetic = {false};
+            scenario.onActivity(activity -> {
+                var view = new ViewModelProvider(activity).get(FoundationViewModel.class).dictionaryView.getValue();
+                synthetic[0] = view != null && view.synthetic();
+            });
+            org.junit.Assume.assumeTrue("synthetic debug dictionary required",synthetic[0]);
+            onView(withId(R.id.direction)).perform(click()).check(matches(withText(R.string.reverse_search)));
+            String draft = "ДЕМО-ОБЪЕКТ";
+            onView(withId(R.id.query)).perform(click(),replaceText(draft),closeSoftKeyboard());
+            awaitDictionary(scenario);
+            var result = withText(startsWith("zeta-demo · noun · Значение 1"));
+            onView(result).perform(scrollTo(),click());
+            awaitDictionary(scenario);
+            onView(withId(R.id.title)).check(matches(withText(R.string.entry)));
+            onView(withId(R.id.panel_title)).check(matches(withText("zeta-demo")));
+            onView(withContentDescription(R.string.back)).perform(click());
+            awaitDictionary(scenario);
+            onView(withId(R.id.query)).check(matches(withText(draft)));
+            onView(result).check(matches(isDisplayed()));
+        }
+    }
+
     @Test public void returningFromRecreatedEntryRestoresQuery() throws InterruptedException {
         try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
             awaitDictionary(scenario);

@@ -9,7 +9,7 @@ from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
-from diagnostics import diagnostic_spellings, english_edition_shape
+from diagnostics import diagnostic_spellings, english_edition_candidates, english_edition_shape
 from kaikki import import_sample, sample_lines
 from prototype import create_database, release_lookup, research_lookup
 from review_queue import validate
@@ -112,3 +112,16 @@ class MilestoneTests(unittest.TestCase):
         ))
         with self.assertRaises(ValueError):
             english_edition_shape(record | dict(senses=['invalid']))
+
+    def test_english_enrichment_retains_array_paths_without_aligning_translations(self):
+        record = dict(word='artificial',pos='noun',lang_code='en',
+                      senses=[dict(glosses=['artificial definition'],tags=['slang']),dict(glosses=['second'])],
+                      sounds=[{},dict(ipa='/artificial/')],
+                      translations=[dict(code='fr',word='artificial'),
+                                    dict(code='ru',word='artificial',sense='second')])
+        result = english_edition_candidates(record)
+        self.assertEqual(result['ipa'][0]['locator'],'/sounds/1/ipa')
+        self.assertEqual(result['senses'][1]['definitions'],[('/senses/1/glosses/0','second')])
+        self.assertEqual(result['unaligned_translations'][0]['locator'],'/translations/1')
+        self.assertNotIn('sense_id',result['unaligned_translations'][0])
+        self.assertEqual(result['rights'],'pending')

@@ -11,7 +11,7 @@ import identity
 from debug_package import make
 from kaikki import import_sample
 from prototype import create_database, normalize, query_plan, release_lookup, research_lookup
-from release_package import checksum, export_package, record_rights, validate_package
+from release_package import STAGING_METADATA, checksum, export_package, record_rights, validate_package
 from review_queue import IDENTITY, apply, progress, suggest, tasks, validate
 
 
@@ -148,6 +148,40 @@ class ReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'schema or indexes'):
             validate_package(package)
 
+    def test_v2_metadata_requires_independent_rights_and_exported_parent(self):
+        apply(self.staging,self.approved)
+        self.clear_core()
+        self.staging.executescript(STAGING_METADATA)
+        for index,(sense,kind,value) in enumerate([
+            (self.rows[0]['sense_id'],'definition','[Artificial definition]'),
+            (self.rows[0]['sense_id'],'source_gloss','[Artificial pending gloss]'),
+            (self.rows[1]['sense_id'],'style','[Artificial excluded parent]'),
+        ]):
+            evidence = self.staging.execute(
+                'INSERT INTO evidence(release_id,locator) VALUES (1,?)',(f'fixture/meta/{index}',)).lastrowid
+            self.staging.execute("""
+                INSERT INTO lexical_metadata(sense_id,kind,value,lang,evidence_id)
+                VALUES (?,?,?,'en',?)
+            """,(sense,kind,value,evidence))
+        self.staging.commit()
+        self.rights('fixture/meta/0')
+        self.rights('fixture/meta/2')
+        v1 = export_package(self.staging,self.registry,self.path/'v1','fixture')
+        self.assertNotIn('lexical_metadata',v1['counts'])
+        result = export_package(self.staging,self.registry,self.path/'v2','fixture',version=2)
+        self.assertEqual(result['counts']['lexical_metadata'],1)
+        with closing(sqlite3.connect(self.path/'v2/dictionary.sqlite')) as db:
+            self.assertEqual(db.execute('SELECT kind FROM lexical_metadata').fetchall(),[('definition',)])
+
+    def test_v2_manifest_size_is_bounded_before_json_parsing(self):
+        from unittest.mock import patch
+        package = self.path/'oversize'
+        package.mkdir()
+        (package/'manifest.json').write_text('not json',encoding='utf-8')
+        (package/'dictionary.sqlite').touch()
+        with patch('release_package.MAX_MANIFEST',4), self.assertRaisesRegex(ValueError,'size limit'):
+            validate_package(package)
+
     def test_form_lookup_uses_index_and_filters_rights(self):
         apply(self.staging,self.approved)
         self.clear_core()
@@ -189,6 +223,9 @@ class IdentityTests(unittest.TestCase):
             self.assertEqual(first['counts']['form'],1)
             self.assertEqual((root/'one'/'normalization_vectors.json').read_bytes(),
                              Path(__file__).with_name('normalization_vectors.json').read_bytes())
+            v2 = make(root/'v2',2)
+            self.assertEqual(v2['schema_version'],2)
+            self.assertEqual(v2['counts']['lexical_metadata'],8)
 
     def test_shared_invalid_scalar_vectors(self):
         vectors = json.loads(Path(__file__).with_name('normalization_vectors.json').read_text(encoding='utf-8'))

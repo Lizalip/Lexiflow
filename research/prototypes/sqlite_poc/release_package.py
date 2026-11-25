@@ -12,7 +12,7 @@ import identity
 from prototype import NORMALIZATION_VERSION, integrity
 from review_queue import initialize
 
-FORMAT = SCHEMA_VERSION = 1
+FORMAT = 1
 DISTRIBUTION = """
 PRAGMA user_version=1;
 CREATE TABLE entry(id TEXT PRIMARY KEY NOT NULL, spelling TEXT NOT NULL, pos TEXT, search_key TEXT NOT NULL, attribution_id TEXT NOT NULL);
@@ -26,6 +26,38 @@ CREATE INDEX translation_search ON translation(search_key,sense_id);
 CREATE INDEX form_search ON form(search_key,entry_id);
 """
 TABLES = ('entry','sense','translation','form','example','example_translation')
+MAX_MANIFEST = 64 * 1024**2
+MAX_DATABASE = 256 * 1024**2
+METADATA_CHECK = """
+    CHECK(length(trim(value)) > 0),
+    CHECK((kind IN ('ipa','pronunciation','region') AND entry_id IS NOT NULL AND sense_id IS NULL AND form_id IS NULL)
+       OR (kind IN ('definition','source_gloss','style','region','cefr') AND entry_id IS NULL AND sense_id IS NOT NULL AND form_id IS NULL)
+       OR (kind='grammar' AND entry_id IS NULL AND sense_id IS NULL AND form_id IS NOT NULL)),
+    CHECK(kind!='cefr' OR value IN ('A1','A2','B1','B2','C1','C2'))
+"""
+METADATA_COLUMNS = """
+    id INTEGER PRIMARY KEY, entry_id TEXT REFERENCES entry(id), sense_id TEXT REFERENCES sense(id),
+    form_id INTEGER REFERENCES form(id), kind TEXT NOT NULL, value TEXT NOT NULL,
+    lang TEXT NOT NULL CHECK(lang IN ('en','ru','und')),
+"""
+DISTRIBUTION_V2 = DISTRIBUTION + f"""
+PRAGMA user_version=2;
+CREATE TABLE lexical_metadata(
+    {METADATA_COLUMNS} attribution_id TEXT NOT NULL, {METADATA_CHECK}
+);
+CREATE INDEX metadata_entry ON lexical_metadata(entry_id);
+CREATE INDEX metadata_sense ON lexical_metadata(sense_id);
+CREATE INDEX metadata_form ON lexical_metadata(form_id);
+CREATE INDEX translation_preview ON translation(sense_id,search_key,wording);
+CREATE INDEX form_parent ON form(entry_id,id);
+CREATE INDEX example_parent ON example(sense_id,id);
+CREATE INDEX example_translation_parent ON example_translation(example_id,id);
+"""
+STAGING_METADATA = f"""
+CREATE TABLE IF NOT EXISTS lexical_metadata(
+    {METADATA_COLUMNS} evidence_id INTEGER NOT NULL UNIQUE REFERENCES evidence(id), {METADATA_CHECK}
+);
+"""
 RIGHTS_FIELDS = ('source_url','license_id','terms_url','attribution','modification','decision','reason','reviewer')
 ATTR_FIELDS = ('source_url','license_id','terms_url','attribution','modification')
 
@@ -69,7 +101,7 @@ def provenance(conn):
     """)}
 
 
-def copy_eligible(src, dest, registry):
+def copy_eligible(src, dest, registry, version):
     rights = provenance(src)
     used = {}
 
@@ -105,7 +137,7 @@ def copy_eligible(src, dest, registry):
     if not entries:
         raise ValueError('no eligible entries with an approved and cleared translation')
 
-    examples = {}
+    examples, forms = {}, {}
     for table, parents, column, fields, lang in (
         ('form',entries,'entry_id','spelling,search_key',None),
         ('example',senses,'sense_id','body','en'),
@@ -122,6 +154,21 @@ def copy_eligible(src, dest, registry):
                                   (parents[parent],*values,attr(eid))).lastrowid
             if table == 'example':
                 examples[row_id] = new_id
+            elif table == 'form':
+                forms[row_id] = new_id
+    if version == 2:
+        if src.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='lexical_metadata'").fetchone():
+            for e,s,f,kind,value,lang,eid in src.execute("""
+                    SELECT entry_id,sense_id,form_id,kind,value,lang,evidence_id
+                    FROM lexical_metadata ORDER BY id
+            """):
+                parents = [(entries,e),(senses,s),(forms,f)]
+                if eid not in rights or any(key is not None and key not in mapping for mapping,key in parents):
+                    continue
+                dest.execute("""
+                    INSERT INTO lexical_metadata(entry_id,sense_id,form_id,kind,value,lang,attribution_id)
+                    VALUES (?,?,?,?,?,?,?)
+                """, (*(mapping.get(key) for mapping,key in parents),kind,value,lang,attr(eid)))
     return used
 
 
@@ -133,9 +180,10 @@ def checksum(path):
         return digest.hexdigest()
 
 
-def export_package(src, registry, package, corpus_version):
+def export_package(src, registry, package, corpus_version, *, version=1):
     if not isinstance(corpus_version,str) or not corpus_version.strip():
         raise ValueError('corpus version is required')
+    schema, table_names = package_schema(version)
     tables = {name for name, in src.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     if not {'semantic_decision','rights_decision'} <= tables:
         raise ValueError('no eligible entries: review and rights decisions are absent')
@@ -144,13 +192,13 @@ def export_package(src, registry, package, corpus_version):
     try:
         with closing(sqlite3.connect(database)) as dest:
             dest.execute('PRAGMA foreign_keys=ON')
-            dest.executescript(DISTRIBUTION)
+            dest.executescript(schema)
             with dest:
-                attributions = copy_eligible(src,dest,registry)
+                attributions = copy_eligible(src,dest,registry,version)
             integrity(dest)
-            counts = {table:dest.execute(f'SELECT count(*) FROM {table}').fetchone()[0] for table in TABLES}
+            counts = {table:dest.execute(f'SELECT count(*) FROM {table}').fetchone()[0] for table in table_names}
         versions = dict(src.execute('SELECT key,value FROM metadata'))
-        result = dict(package_format=FORMAT, schema_version=SCHEMA_VERSION, corpus_version=corpus_version,
+        result = dict(package_format=FORMAT, schema_version=version, corpus_version=corpus_version,
                       normalization=versions['normalization'], unicode_version=versions['unicode_version'],
                       language_pairs=['en-ru','ru-en'], counts=counts, database_sha256=checksum(database),
                       sources=sorted({(a['source'],a['snapshot'],a['source_url']) for a in attributions.values()}),
@@ -168,13 +216,24 @@ def schema_objects(conn):
     return sorted(conn.execute("SELECT type,name,sql FROM sqlite_master WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%'"))
 
 
+def package_schema(version):
+    if type(version) is not int or version not in (1,2):
+        raise ValueError('unsupported schema version')
+    return (DISTRIBUTION,TABLES) if version == 1 else (DISTRIBUTION_V2,(*TABLES,'lexical_metadata'))
+
+
 def validate_package(package):
     database = package/'dictionary.sqlite'
-    data = json.loads((package/'manifest.json').read_text(encoding='utf-8'))
+    manifest = package/'manifest.json'
+    if manifest.stat().st_size > MAX_MANIFEST or database.stat().st_size > MAX_DATABASE:
+        raise ValueError('dictionary package exceeds size limit')
+    data = json.loads(manifest.read_text(encoding='utf-8'))
     if not isinstance(data,dict):
         raise ValueError('manifest must be an object')
-    if (data.get('package_format'),data.get('schema_version'),data.get('normalization'),
-            data.get('language_pairs')) != (FORMAT,SCHEMA_VERSION,NORMALIZATION_VERSION,['en-ru','ru-en']):
+    version = data.get('schema_version')
+    schema, table_names = package_schema(version)
+    if (data.get('package_format'),data.get('normalization'),
+            data.get('language_pairs')) != (FORMAT,NORMALIZATION_VERSION,['en-ru','ru-en']):
         raise ValueError('unsupported dictionary package')
     for field in ('corpus_version','unicode_version'):
         if not isinstance(data.get(field),str) or not data[field].strip():
@@ -195,11 +254,11 @@ def validate_package(package):
     if data.get('sources') != [list(row) for row in sources]:
         raise ValueError('inconsistent source list')
     with closing(sqlite3.connect(database.resolve().as_uri()+'?mode=ro',uri=True)) as conn, closing(sqlite3.connect(':memory:')) as expected:
-        expected.executescript(DISTRIBUTION)
+        expected.executescript(schema)
         integrity(conn)
-        if conn.execute('PRAGMA user_version').fetchone()[0] != SCHEMA_VERSION or schema_objects(conn) != schema_objects(expected):
+        if conn.execute('PRAGMA user_version').fetchone()[0] != version or schema_objects(conn) != schema_objects(expected):
             raise ValueError('wrong distribution schema or indexes')
-        counts = {table:conn.execute(f'SELECT count(*) FROM {table}').fetchone()[0] for table in TABLES}
+        counts = {table:conn.execute(f'SELECT count(*) FROM {table}').fetchone()[0] for table in table_names}
         if counts != data.get('counts') or not all(counts[key] for key in ('entry','sense','translation')):
             raise ValueError('invalid package counts or empty corpus')
         if conn.execute('SELECT id FROM entry INTERSECT SELECT id FROM sense').fetchone():
@@ -211,7 +270,7 @@ def validate_package(package):
             raise ValueError('entry has no eligible sense')
         if conn.execute('SELECT 1 FROM sense s WHERE NOT EXISTS (SELECT 1 FROM translation t WHERE t.sense_id=s.id)').fetchone():
             raise ValueError('sense has no eligible translation')
-        for table in TABLES:
+        for table in table_names:
             if any(ref not in attrs for ref, in conn.execute(f'SELECT DISTINCT attribution_id FROM {table}')):
                 raise ValueError('unresolved attribution')
         for origin, translation, sense, entry in conn.execute("""
@@ -238,6 +297,8 @@ def main():
         ('validate', ('package',)),
     ):
         command = commands.add_parser(name)
+        if name == 'export':
+            command.add_argument('--schema-version',type=int,choices=(1,2),default=1)
         for arg in arguments:
             command.add_argument(arg, type=str if arg == 'corpus_version' else Path)
     args = parser.parse_args()
@@ -267,7 +328,7 @@ def main():
             registry.execute('BEGIN')
             if registry.execute('SELECT version FROM identity_registry').fetchall() != [(1,)]:
                 raise ValueError('unsupported identity registry')
-            result = export_package(staging,registry,args.package,args.corpus_version)
+            result = export_package(staging,registry,args.package,args.corpus_version,version=args.schema_version)
     else:
         result = validate_package(args.package)
     print(json.dumps({'counts':result['counts'],'database_sha256':result['database_sha256']}))

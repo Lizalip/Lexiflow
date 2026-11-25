@@ -11,7 +11,7 @@ from uuid import NAMESPACE_URL, uuid5
 import identity
 from kaikki import import_sample
 from prototype import create_database
-from release_package import export_package, record_rights
+from release_package import STAGING_METADATA, export_package, record_rights
 from review_queue import IDENTITY, apply, tasks
 
 FIXTURES = [
@@ -24,7 +24,7 @@ FIXTURES = [
 ]
 
 
-def make(output):
+def make(output, version=1):
     with TemporaryDirectory() as temp, closing(sqlite3.connect(':memory:')) as src, closing(sqlite3.connect(':memory:')) as registry:
         source = Path(temp)/'artificial.jsonl'
         source.write_text('\n'.join(json.dumps(dict(record,lang_code='en')) for record in FIXTURES)+'\n', encoding='utf-8')
@@ -38,6 +38,27 @@ def make(output):
                      'method':'human','reason':'artificial technical test marker, no real editorial approval'} for task in rows])
         src.execute("UPDATE source SET name='LexiFlow artificial technical fixtures'")
         src.commit()
+        if version == 2:
+            src.executescript(STAGING_METADATA)
+            entry, sense = rows[0]['entry_id'], rows[0]['sense_id']
+            form = src.execute("SELECT id FROM form WHERE entry_id=?",(entry,)).fetchone()[0]
+            for index,(owner,kind,value,lang) in enumerate([
+                ((entry,None,None),'ipa','/ˈzɛtə/','en'),
+                ((entry,None,None),'pronunciation','[artificial variant]','en'),
+                ((entry,None,None),'region','[artificial region]','en'),
+                ((None,sense,None),'definition','[Artificial technical definition]','en'),
+                ((None,sense,None),'source_gloss','[Искусственная глосса]','ru'),
+                ((None,sense,None),'style','[artificial register]','en'),
+                ((None,sense,None),'cefr','A1','und'),
+                ((None,None,form),'grammar','[artificial plural]','en'),
+            ]):
+                evidence = src.execute("INSERT INTO evidence(release_id,locator) VALUES (1,?)",
+                                       (f'artificial/metadata/{index}',)).lastrowid
+                src.execute("""
+                    INSERT INTO lexical_metadata(entry_id,sense_id,form_id,kind,value,lang,evidence_id)
+                    VALUES (?,?,?,?,?,?,?)
+                """,(*owner,kind,value,lang,evidence))
+            src.commit()
         for locator, in src.execute('SELECT locator FROM evidence').fetchall():
             record_rights(src,sha,locator,source_url='https://example.invalid/lexiflow-fixtures',
                           terms_url='https://example.invalid/lexiflow-fixtures',
@@ -48,7 +69,7 @@ def make(output):
             for local_id, locator in src.execute(f'SELECT t.id,e.locator FROM {kind} t JOIN evidence e ON e.id=t.evidence_id'):
                 stable = str(uuid5(NAMESPACE_URL,'lexiflow-debug-v1/'+locator))
                 identity.bind(registry,kind,sha,local_id,stable,reason='synthetic fixture')
-        result = export_package(src,registry,output,'synthetic-debug-v1')
+        result = export_package(src,registry,output,f'synthetic-debug-v{version}',version=version)
         shutil.copyfile(Path(__file__).with_name('normalization_vectors.json'), output/'normalization_vectors.json')
         return result
 
@@ -56,5 +77,6 @@ def make(output):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('output',type=Path)
+    parser.add_argument('--schema-version',type=int,choices=(1,2),default=1)
     args = parser.parse_args()
-    print(json.dumps(make(args.output)['counts']))
+    print(json.dumps(make(args.output,args.schema_version)['counts']))

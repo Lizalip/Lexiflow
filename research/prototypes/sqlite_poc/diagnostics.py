@@ -40,3 +40,51 @@ def english_edition_shape(record):
         'senses_with_gloss_array': sum(isinstance(sense.get('glosses'), list) for sense in senses),
         'top_level_translation_candidates': len(translations),
     }
+
+
+def english_edition_candidates(record):
+    """Project a single English Wiktextract record for review, preserving local array paths."""
+    english_edition_shape(record)
+    if not isinstance(record.get('word'),str) or not record['word'].strip():
+        raise ValueError('expected a headword')
+    if not isinstance(record.get('pos'),str) or not record['pos'].strip():
+        raise ValueError('expected a part of speech')
+
+    def items(owner, key):
+        raw = owner.get(key, [])
+        if not isinstance(raw,list):
+            raise ValueError(f'{key} must be a list')
+        return raw
+
+    def texts(owner, key, path):
+        for index,value in enumerate(items(owner,key)):
+            if not isinstance(value,str) or not value.strip():
+                raise ValueError(f'{key} contains invalid text')
+            yield (f'{path}/{key}/{index}',value)
+
+    senses = []
+    for index,sense in enumerate(record['senses']):
+        path = f'/senses/{index}'
+        senses.append(dict(locator=path, definitions=list(texts(sense,'glosses',path)),
+                           raw_tags=list(texts(sense,'tags',path))))
+    ipa = []
+    for index,sound in enumerate(items(record,'sounds')):
+        if not isinstance(sound,dict):
+            raise ValueError('invalid sound')
+        if 'ipa' in sound:
+            value = sound['ipa']
+            if not isinstance(value,str) or not value.strip():
+                raise ValueError('invalid IPA')
+            ipa.append(dict(locator=f'/sounds/{index}/ipa',value=value))
+    translations = []
+    for index,item in enumerate(items(record,'translations')):
+        if item.get('code') != 'ru':
+            continue
+        if not isinstance(item.get('word'),str) or not item['word'].strip():
+            raise ValueError('invalid translation')
+        hint = item.get('sense')
+        if hint is not None and not isinstance(hint,str):
+            raise ValueError('invalid source sense hint')
+        translations.append(dict(locator=f'/translations/{index}',word=item['word'],source_hint=hint))
+    return dict(word=record['word'],pos=record['pos'],senses=senses,ipa=ipa,
+                unaligned_translations=translations,rights='pending')

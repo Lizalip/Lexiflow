@@ -23,15 +23,20 @@ public class DictionarySearchTest {
             db.execSQL("INSERT INTO entry VALUES ('h','test','noun','test'),('f','other','verb','other'),"
                     + "('v','test','verb','test'),('p','test phrase','phrase','test phrase')");
             db.execSQL("INSERT INTO sense VALUES ('h1','h',1),('h2','h',2),('form','f',1),('verb','v',1),('prefix','p',1)");
+            db.execSQL("INSERT INTO entry VALUES ('punct','test''s-phrase [%_]','phrase','test''s-phrase [%_]')");
+            db.execSQL("INSERT INTO sense VALUES ('punct','punct',1)");
             db.execSQL("INSERT INTO form VALUES ('f','test','test'),('f','test-s','test-s')");
             db.execSQL("INSERT INTO translation(sense_id,wording,search_key) VALUES "
                     + "('h1','Ёж','ёж'),('h1','Ёжик','ёжик'),('h2','Еж','еж'),('prefix','Ёж-сказка','ёж-сказка')");
             var rows = query(db," TEST ",false);
-            assertEquals(Arrays.asList("h1","h2","verb","form","prefix"),rows);
+            assertEquals(Arrays.asList("h1","h2","verb","form","prefix","punct"),rows);
             assertEquals(Arrays.asList("h1","prefix"),query(db,"Е\u0308Ж",true));
             assertEquals(Arrays.asList("h2"),query(db,"ЕЖ",true));
             assertEquals(Arrays.asList("prefix"),query(db,"  test\u00a0phrase ",false));
             assertTrue(query(db,"test’",false).isEmpty());
+            assertEquals(Arrays.asList("punct"),query(db,"TEST'S-PHRASE [%_]",false));
+            assertTrue(query(db,"test's-phrase [_%]",false).isEmpty());
+            assertTrue(query(db,"test's–phrase",false).isEmpty());
             var reverse = DictionarySearch.ranked("ёж",true);
             try (var cursor = db.rawQuery(reverse.sql(),reverse.arguments())) {
                 assertTrue(cursor.moveToFirst());

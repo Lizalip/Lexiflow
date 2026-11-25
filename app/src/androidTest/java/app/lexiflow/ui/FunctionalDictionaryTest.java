@@ -100,6 +100,10 @@ public class FunctionalDictionaryTest {
             repository.install(manifest,database);
             assertEquals(DictionaryRepository.Status.AVAILABLE,repository.status());
             assertTrue(repository.isSynthetic());
+            assertTrue(repository.search(" \u00a0\t",false).isEmpty());
+            char[] overlong = new char[257];
+            java.util.Arrays.fill(overlong,'a');
+            assertTrue(repository.search(new String(overlong),false).isEmpty());
             assertEquals(3,repository.search("ZETA-DEMO",false).size());
             assertEquals(4,repository.search("zeta",false).size());
             assertEquals(2,repository.search("zeta-demos",false).size());

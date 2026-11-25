@@ -113,6 +113,9 @@ public class FunctionalDictionaryTest {
             assertEquals("демо-объект",reverse.get(0).translation());
             var article = repository.entry(reverse.get(0).entryId());
             assertEquals("noun",article.pos());
+            assertEquals(1,article.forms().size());
+            assertEquals("zeta-demos",article.forms().get(0).spelling());
+            assertTrue(article.forms().get(0).attribution().contains("synthetic"));
             assertEquals(2,article.senses().size());
             assertEquals(1,article.senses().get(0).examples().size());
             assertTrue(article.senses().get(1).examples().isEmpty());

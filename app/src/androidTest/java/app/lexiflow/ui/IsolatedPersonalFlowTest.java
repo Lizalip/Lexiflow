@@ -115,6 +115,9 @@ public class IsolatedPersonalFlowTest {
             capture(scenario,"06-review-front");
             action(R.string.reveal);
             onView(withId(R.id.body)).check(matches(withText(custom)));
+            scenario.recreate();
+            await(scenario,state -> state.exercise() != null && !state.exercise().reverse,"revealed exercise restored");
+            onView(withId(R.id.body)).check(matches(withText(custom)));
             capture(scenario,"07-review-answer");
             onView(withText(ratings[1])).perform(scrollTo(),click());
             await(scenario,state -> state.exercise() != null && state.exercise().reverse,"reverse exercise");
@@ -187,7 +190,18 @@ public class IsolatedPersonalFlowTest {
         scenario.onActivity(activity -> {
             android.view.View root = activity.findViewById(R.id.root);
             frame[0] = Bitmap.createBitmap(root.getWidth(),root.getHeight(),Bitmap.Config.ARGB_8888);
-            root.draw(new Canvas(frame[0]));
+            var canvas = new Canvas(frame[0]);
+            var theme = activity.obtainStyledAttributes(new int[]{android.R.attr.windowBackground});
+            try {
+                var background = theme.getDrawable(0);
+                if (background != null) {
+                    background.setBounds(0,0,root.getWidth(),root.getHeight());
+                    background.draw(canvas);
+                }
+            } finally {
+                theme.recycle();
+            }
+            root.draw(canvas);
         });
         var context = InstrumentationRegistry.getInstrumentation().getTargetContext();
         File evidence = new File(context.getCacheDir(),"lexiflow-evidence");

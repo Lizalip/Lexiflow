@@ -247,6 +247,13 @@ public final class MainActivity extends AppCompatActivity {
         }
         addAction(rows,getString(R.string.save_entry),() -> model.save(entry,null));
         addMetadata(rows,entry.metadata());
+        if (!entry.forms().isEmpty()) {
+            TextView forms = (TextView)getLayoutInflater().inflate(R.layout.entry_forms,rows,false);
+            var text = new StringBuilder(getString(R.string.word_forms));
+            for (var form : entry.forms()) text.append("\n").append(form.spelling()).append("\n").append(form.attribution());
+            forms.setText(text);
+            rows.addView(forms);
+        }
         for (var sense : entry.senses()) {
             TextView details = new TextView(this);
             details.setTextIsSelectable(true);
@@ -514,9 +521,9 @@ public final class MainActivity extends AppCompatActivity {
             return;
         }
         heading.setText(exercise.reverse ? exercise.answer : exercise.spelling);
-        if (!model.answerShown()) {
+        if (!model.answerShown(exercise)) {
             body.setText(R.string.review_prompt);
-            addAction(rows,getString(R.string.reveal),() -> { model.revealAnswer(); renderPersonal(); });
+            addAction(rows,getString(R.string.reveal),() -> { model.revealAnswer(exercise); renderPersonal(); });
             return;
         }
         body.setText(exercise.reverse ? exercise.spelling : exercise.answer);

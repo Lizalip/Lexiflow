@@ -551,7 +551,12 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
                             metadata(sid,true),context));
                 }
             }
-            return new Entry(id,entry.getString(0),entry.getString(1),senses,attribution(entry.getString(2)),metadata(id,false));
+            Set<Form> forms = new java.util.LinkedHashSet<>();
+            try (Cursor rows = database.rawQuery("SELECT spelling,attribution_id FROM form WHERE entry_id=? ORDER BY id",new String[]{id})) {
+                while (rows.moveToNext()) forms.add(new Form(rows.getString(0),attribution(rows.getString(1))));
+            }
+            return new Entry(id,entry.getString(0),entry.getString(1),senses,attribution(entry.getString(2)),
+                    metadata(id,false),new ArrayList<>(forms));
         }
     }
 

@@ -98,6 +98,7 @@
     <string name="metadata_gloss">Исходная глосса</string>
     <string name="metadata_cefr">CEFR</string>
     <string name="metadata_grammar">Грамматика</string>
+    <string name="word_forms">Формы слова</string>
     <string name="metadata_line">%1$s · %2$s\n%3$s</string>
     <string name="personal_page_range">%1$d–%2$d из %3$d</string>
     <string name="personal_previous_page">Предыдущая страница</string>

@@ -102,4 +102,21 @@ public class FoundationViewModelTest {
         restored.setSavedQuery("");
         assertEquals("",new FoundationViewModel(state).savedQuery());
     }
+
+    @Test public void revealedAnswerBelongsToOneCardAtOneScheduledTime() {
+        SavedStateHandle state = new SavedStateHandle();
+        FoundationViewModel model = new FoundationViewModel(state);
+        var card = new app.lexiflow.data.PersonalDatabase.Exercise();
+        card.id = 12;
+        card.due = 100;
+        assertFalse(model.answerShown(card));
+        model.revealAnswer(card);
+        FoundationViewModel restored = new FoundationViewModel(state);
+        assertTrue(restored.answerShown(card));
+        card.id = 13;
+        assertFalse(restored.answerShown(card));
+        card.id = 12;
+        card.due = 200;
+        assertFalse(restored.answerShown(card));
+    }
 }

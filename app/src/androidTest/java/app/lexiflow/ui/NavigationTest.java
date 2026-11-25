@@ -20,6 +20,7 @@ import static androidx.test.espresso.matcher.ViewMatchers.*;
 import static org.hamcrest.Matchers.anyOf;
 import static org.hamcrest.Matchers.allOf;
 import static org.hamcrest.Matchers.startsWith;
+import static org.hamcrest.Matchers.containsString;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
@@ -113,6 +114,7 @@ public class NavigationTest {
             awaitDictionary(scenario);
             onView(withId(R.id.title)).check(matches(withText(R.string.entry)));
             onView(withId(R.id.panel_title)).check(matches(withText("zeta-demo")));
+            onView(withId(R.id.entry_forms)).check(matches(withText(containsString("zeta-demos"))));
             onView(withContentDescription(R.string.back)).perform(click());
             awaitDictionary(scenario);
             onView(withId(R.id.query)).check(matches(withText(draft)));

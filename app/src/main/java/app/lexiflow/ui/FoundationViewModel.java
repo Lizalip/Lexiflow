@@ -39,7 +39,6 @@ public final class FoundationViewModel extends ViewModel {
     final MutableLiveData<PersonalView> personalView = new MutableLiveData<>();
     final MutableLiveData<Boolean> personalError = new MutableLiveData<>();
     final MutableLiveData<Integer> notice = new MutableLiveData<>();
-    private boolean answerShown;
 
     public FoundationViewModel(SavedStateHandle state) {
         this.state = state;
@@ -142,7 +141,6 @@ public final class FoundationViewModel extends ViewModel {
                             && (notesOnly != notesOnly() || alphabetical != alphabetical()
                             || !savedQuery.equals(savedQuery())))) return;
                     if (target == Screen.REVIEW) {
-                        answerShown = false;
                         if (snapshot.exercise() == null && sessionReviewed() > 0) {
                             state.set("reviewSessionFinished",true);
                         }
@@ -270,8 +268,16 @@ public final class FoundationViewModel extends ViewModel {
         state.set("notesOnly",!notesOnly());
         changePersonalPage(0);
     }
-    boolean answerShown() { return answerShown; }
-    void revealAnswer() { answerShown = true; }
+    boolean answerShown(PersonalDatabase.Exercise exercise) {
+        Long card = state.get("revealedCard");
+        Long due = state.get("revealedCardDue");
+        return card != null && card == exercise.id && due != null && due == exercise.due;
+    }
+
+    void revealAnswer(PersonalDatabase.Exercise exercise) {
+        state.set("revealedCard",exercise.id);
+        state.set("revealedCardDue",exercise.due);
+    }
     void grade(PersonalDatabase.Exercise exercise,int rating) {
         changePersonal(library -> {
             if (library.grade(exercise,rating,System.currentTimeMillis(),ReviewScheduler::basic)) {

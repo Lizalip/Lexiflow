@@ -26,6 +26,32 @@ import static org.junit.Assume.assumeTrue;
 
 @RunWith(AndroidJUnit4.class)
 public class PackageReceiptTest {
+    @Test public void compactAttributionIsReverifiedWhenManifestBytesChange() throws Exception {
+        var target = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        File root = new File(target.getCacheDir(),"receipt-context-" + UUID.randomUUID());
+        var repository = isolated(target,root);
+        try (var json = target.getAssets().open("dictionary-context/manifest.json");
+             var database = target.getAssets().open("dictionary-context/dictionary.sqlite")) {
+            repository.install(json,database);
+            repository.close();
+            repository.load();
+            assertEquals(DictionaryRepository.Status.AVAILABLE,repository.status());
+            repository.close();
+            Path active = active(root);
+            Path path = active.resolve("manifest.json");
+            var manifest = new JSONObject(new String(Files.readAllBytes(path),StandardCharsets.UTF_8));
+            var attributions = manifest.getJSONObject("attributions");
+            attributions.getJSONArray(attributions.keys().next()).put(2,"changed without recomputing provenance");
+            Files.write(path,manifest.toString().getBytes(StandardCharsets.UTF_8));
+            repository.load();
+            assertEquals(DictionaryRepository.Status.CORRUPTED,repository.status());
+            assertTrue(repository.search("zeta",false).isEmpty());
+        } finally {
+            repository.close();
+            cleanup(root);
+        }
+    }
+
     @Test public void replacedBytesAndSidecarsCannotReuseReceipt() throws Exception {
         var instrumentation = InstrumentationRegistry.getInstrumentation();
         Context target = instrumentation.getTargetContext();

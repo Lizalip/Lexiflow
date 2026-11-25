@@ -29,6 +29,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.BiConsumer;
 
 /** Called on one background executor. SQLite connections always open read-only. */
 public final class LocalDictionaryRepository implements DictionaryRepository {
@@ -39,6 +40,7 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
     static final long MAX_MANIFEST = 64L * 1024 * 1024;
     static final long MAX_DATABASE = 256L * 1024 * 1024;
     private final Context context;
+    private final BiConsumer<String,Long> startupTiming;
     private volatile Status status = Status.MISSING;
     private SQLiteDatabase database;
     private PackageManifest manifest;
@@ -47,7 +49,12 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
     private boolean loadAttempted;
 
     public LocalDictionaryRepository(Context context) {
+        this(context,null);
+    }
+
+    LocalDictionaryRepository(Context context,BiConsumer<String,Long> startupTiming) {
         this.context = context.getApplicationContext();
+        this.startupTiming = startupTiming;
     }
 
     @Override public Status status() { return status; }
@@ -55,9 +62,15 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
     public boolean isSynthetic() { return manifest != null && manifest.version().startsWith("synthetic-"); }
 
     public synchronized void load() {
+        long started = System.nanoTime();
         synchronized (DictionaryPackageStore.LOCK) {
             loadLocked();
         }
+        timed("repository",started);
+    }
+
+    private void timed(String phase,long started) {
+        if (startupTiming != null) startupTiming.accept(phase,System.nanoTime()-started);
     }
 
     private void loadLocked() {
@@ -123,8 +136,20 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
             throw new IOException("missing package directory");
         }
         File manifestFile = new File(folder,"manifest.json");
-        var parsed = readFileManifest(manifestFile);
-        accept(openValidated(new File(folder,"dictionary.sqlite"),parsed,true),parsed,folder);
+        File databaseFile = new File(folder,"dictionary.sqlite");
+        String databaseDigest = checkedDatabaseDigest(databaseFile);
+        long started = System.nanoTime();
+        String expectedManifest = sha256(manifestFile,MAX_MANIFEST);
+        timed("manifest_digest",started);
+        started = System.nanoTime();
+        boolean verified = matchesReceipt(receipt(databaseFile),validation(expectedManifest,databaseDigest));
+        timed("receipt",started);
+        var parsed = readFileManifest(manifestFile,!verified);
+        // Bind reuse to the bytes consumed by the parser, even if the file changed after hashing.
+        if (verified && !expectedManifest.equals(parsed.digest())) {
+            throw new SQLiteException("manifest changed while opening verified package");
+        }
+        accept(openValidated(databaseFile,parsed,databaseDigest,verified),parsed,folder);
         return manifestFile;
     }
 
@@ -192,9 +217,9 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
         boolean pointerAttempted = false;
         try {
             writeCandidate(json,jsonFile,MAX_MANIFEST);
-            var candidate = readFileManifest(jsonFile);
+            var candidate = readFileManifest(jsonFile,true);
             writeCandidate(db,dbFile,MAX_DATABASE);
-            candidateDb = openValidated(dbFile,candidate,false);
+            candidateDb = openValidated(dbFile,candidate,checkedDatabaseDigest(dbFile),false);
             var state = new DictionaryPackageStore.State(folder.getName(),openFolder == null ? null : openFolder.getName());
             pointerAttempted = true;
             DictionaryPackageStore.write(root,state);
@@ -209,25 +234,42 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
         }
     }
 
-    private SQLiteDatabase openValidated(File file, ParsedManifest parsed, boolean allowReceipt) throws IOException, JSONException {
+    private static void checkSidecars(File file) {
+        for (String sidecar : new String[]{"-wal","-shm","-journal"}) {
+            if (new File(file.getPath()+sidecar).exists()) throw new SQLiteException("unexpected database sidecar");
+        }
+    }
+
+    private String checkedDatabaseDigest(File file) throws IOException {
+        checkSidecars(file);
+        long started = System.nanoTime();
+        String digest = sha256(file,MAX_DATABASE);
+        timed("sqlite_digest",started);
+        return digest;
+    }
+
+    private String validation(String manifestDigest,String databaseDigest) {
+        return "2\n" + (debug() ? "debug" : "apk") + "\n"
+                + android.os.Build.VERSION.SDK_INT + "\n" + android.os.Build.VERSION.INCREMENTAL + "\n"
+                + android.icu.lang.UCharacter.getUnicodeVersion() + "\n" + manifestDigest + "\n" + databaseDigest;
+    }
+
+    private SQLiteDatabase openValidated(File file, ParsedManifest parsed, String databaseDigest, boolean verified)
+            throws IOException, JSONException {
         PackageManifest candidate = parsed.manifest();
         if (candidate.version().startsWith("synthetic-") && !debug()) {
             throw new UnsupportedOperationException("synthetic packages require a debug installation");
         }
-        for (String sidecar : new String[]{"-wal","-shm","-journal"}) {
-            if (new File(file.getPath()+sidecar).exists()) throw new SQLiteException("unexpected database sidecar");
-        }
-        if (file.length() > MAX_DATABASE || !candidate.digest().equals(sha256(file))) {
+        checkSidecars(file);
+        if (!candidate.digest().equals(databaseDigest)) {
             throw new SQLiteException("size or checksum mismatch");
         }
-        AtomicFile receipt = receipt(file);
-        String validation = "1\n" + (debug() ? "debug" : "apk") + "\n"
-                + android.os.Build.VERSION.SDK_INT + "\n" + android.os.Build.VERSION.INCREMENTAL + "\n"
-                + android.icu.lang.UCharacter.getUnicodeVersion() + "\n" + parsed.digest() + "\n" + candidate.digest();
+        long started = System.nanoTime();
         SQLiteDatabase opened = SQLiteDatabase.openDatabase(file.getPath(),null,SQLiteDatabase.OPEN_READONLY);
+        timed("sqlite_open",started);
         try {
             if (opened.getVersion() != candidate.schema()) throw new UnsupportedOperationException("schema mismatch");
-            if (allowReceipt && matchesReceipt(receipt,validation)) return opened;
+            if (verified) return opened;
             if (!"ok".equals(scalar(opened,"PRAGMA integrity_check"))) throw new SQLiteException("integrity check");
             try (Cursor check = opened.rawQuery("PRAGMA foreign_key_check",null)) {
                 if (check.moveToFirst()) throw new SQLiteException("foreign key check");
@@ -300,7 +342,7 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
                     + "(SELECT 1 FROM translation t WHERE t.sense_id=s.id)"))
                     || !"0".equals(scalar(opened,"SELECT count(*) FROM entry e WHERE NOT EXISTS "
                     + "(SELECT 1 FROM sense s WHERE s.entry_id=e.id)"))) throw new SQLiteException("empty or incomplete corpus");
-            writeReceipt(receipt,validation);
+            writeReceipt(receipt(file),validation(parsed.digest(),databaseDigest));
             return opened;
         } catch (RuntimeException | JSONException failed) {
             opened.close();
@@ -398,7 +440,7 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
         }
     }
 
-    private static PackageManifest readManifest(InputStream input) throws IOException, JSONException {
+    private PackageManifest readManifest(InputStream input,boolean verifyAttributionIds) throws IOException, JSONException {
         InputStream bounded = new FilterInputStream(input) {
             private long remaining = MAX_MANIFEST;
 
@@ -415,7 +457,8 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
             }
         };
         try {
-            return PackageManifest.parse(new InputStreamReader(bounded,StandardCharsets.UTF_8.newDecoder()));
+            return PackageManifest.parse(new InputStreamReader(bounded,StandardCharsets.UTF_8.newDecoder()),
+                    startupTiming,verifyAttributionIds);
         } catch (android.util.MalformedJsonException | java.io.EOFException malformed) {
             throw new JSONException("malformed package manifest");
         }
@@ -423,10 +466,12 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
 
     private record ParsedManifest(PackageManifest manifest,String digest) {}
 
-    private static ParsedManifest readFileManifest(File file) throws IOException, JSONException {
+    private ParsedManifest readFileManifest(File file,boolean verifyAttributionIds) throws IOException, JSONException {
+        long started = System.nanoTime();
         MessageDigest digest = newDigest();
         try (InputStream json = new DigestInputStream(new FileInputStream(file),digest)) {
-            PackageManifest manifest = readManifest(json);
+            PackageManifest manifest = readManifest(json,verifyAttributionIds);
+            timed("manifest_with_digest",started);
             return new ParsedManifest(manifest,hexDigest(digest.digest()));
         }
     }
@@ -455,10 +500,18 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
         }
     }
 
-    private static String sha256(File file) throws IOException {
+    private static String sha256(File file,long limit) throws IOException {
+        var digest = newDigest();
         try (InputStream input = new FileInputStream(file)) {
-            return sha256(input);
+            byte[] buffer = new byte[32768];
+            long size = 0;
+            for (int count; (count = input.read(buffer)) != -1;) {
+                size += count;
+                if (size > limit) throw new SQLiteException("package size limit");
+                digest.update(buffer,0,count);
+            }
         }
+        return hexDigest(digest.digest());
     }
 
     private static String sha256(InputStream input) throws IOException {

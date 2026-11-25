@@ -16,6 +16,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.BiConsumer;
 import java.util.regex.Pattern;
 
 /** Compact links share immutable policies for the lifetime of the open package. */
@@ -58,9 +59,16 @@ record PackageManifest(int format, int schema, String version, String unicode, S
     }
 
     static PackageManifest parse(Reader input) throws IOException, JSONException {
+        return parse(input,null,true);
+    }
+
+    static PackageManifest parse(Reader input,BiConsumer<String,Long> timing,boolean verifyAttributionIds)
+            throws IOException, JSONException {
+        long started = System.nanoTime();
         var reader = new JsonReader(input);
         Map<String,Object> root = object(read(reader,0));
         if (reader.peek() != JsonToken.END_DOCUMENT) throw new JSONException("trailing manifest data");
+        if (timing != null) timing.accept("json_with_input",System.nanoTime()-started);
         int format = integer(root.get("package_format"));
         int schema = integer(root.get("schema_version"));
         if ((format != 1 && format != 2) || (schema != 1 && schema != 2)
@@ -70,7 +78,9 @@ record PackageManifest(int format, int schema, String version, String unicode, S
         }
         String digest = requiredText(root.get("database_sha256"));
         if (!SHA256.matcher(digest).matches()) throw new JSONException("invalid database digest");
-        var attributions = decode(root,format);
+        started = System.nanoTime();
+        var attributions = decode(root,format,verifyAttributionIds);
+        if (timing != null) timing.accept("attribution_decode_and_verify",System.nanoTime()-started);
         var contexts = new HashMap<String,ContextLink>();
         if (root.containsKey("sense_context")) {
             var extension = object(root.get("sense_context"));
@@ -93,7 +103,8 @@ record PackageManifest(int format, int schema, String version, String unicode, S
                 requiredText(root.get("unicode_version")),digest,object(root.get("counts")),attributions,contexts);
     }
 
-    private static Map<String,Attribution> decode(Map<String,Object> root,int format) throws JSONException {
+    private static Map<String,Attribution> decode(Map<String,Object> root,int format,boolean verifyAttributionIds)
+            throws JSONException {
         List<Policy> policies = new ArrayList<>();
         List<CanonicalPolicy> encodedPolicies = new ArrayList<>();
         if (format == 2) {
@@ -104,7 +115,7 @@ record PackageManifest(int format, int schema, String version, String unicode, S
                 Policy policy = policy(fields);
                 if (!distinct.add(policy)) throw new JSONException("duplicate attribution policy");
                 policies.add(policy);
-                if (encodedPolicies.size() < CACHED_CANONICAL_POLICIES) {
+                if (verifyAttributionIds && encodedPolicies.size() < CACHED_CANONICAL_POLICIES) {
                     encodedPolicies.add(new CanonicalPolicy(policy));
                 }
             }
@@ -113,7 +124,7 @@ record PackageManifest(int format, int schema, String version, String unicode, S
         var sources = new HashSet<Source>();
         Map<String,Object> rawEntries = object(root.get("attributions"));
         Map<String,Attribution> entries = new HashMap<>(rawEntries.size()*4/3+1);
-        MessageDigest hash = sha256();
+        MessageDigest hash = verifyAttributionIds ? sha256() : null;
         StringBuilder canonical = new StringBuilder();
         var rows = rawEntries.entrySet().iterator();
         while (rows.hasNext()) {
@@ -135,7 +146,7 @@ record PackageManifest(int format, int schema, String version, String unicode, S
                 attribution = new Attribution(policy(row),requiredText(row.get("locator")),
                         requiredText(row.get("modification")));
             }
-            if (!matchesId(hash,entry.getKey(),attribution,encoded,canonical)) {
+            if (verifyAttributionIds && !matchesId(hash,entry.getKey(),attribution,encoded,canonical)) {
                 throw new JSONException("attribution identifier mismatch");
             }
             sources.add(attribution.policy().source());

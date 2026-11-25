@@ -3,6 +3,7 @@ package app.lexiflow.ui;
 import androidx.test.core.app.ActivityScenario;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.lifecycle.ViewModelProvider;
+import com.google.android.material.appbar.MaterialToolbar;
 import app.lexiflow.R;
 import app.lexiflow.data.DictionaryRepository;
 import java.util.concurrent.CountDownLatch;
@@ -19,12 +20,16 @@ import static androidx.test.espresso.matcher.ViewMatchers.*;
 import static org.hamcrest.Matchers.anyOf;
 import static org.hamcrest.Matchers.startsWith;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 
 @RunWith(AndroidJUnit4.class)
 public class NavigationTest {
     @Test public void launchShowsDictionaryStateAndTabsSwitchSections() throws InterruptedException {
         try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
             onView(withId(R.id.title)).check(matches(withText(R.string.dictionary)));
+            onView(withId(R.id.navigation)).check(matches(isDisplayed()));
+            assertToolbarIcon(scenario,false);
             awaitDictionary(scenario);
             onView(withId(R.id.panel_title)).check(matches(anyOf(
                     withText(R.string.no_corpus),withText(R.string.dictionary_prompt))));
@@ -73,18 +78,35 @@ public class NavigationTest {
     @Test public void settingsReturnsToProgressThenBackToReview() throws InterruptedException {
         try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
             onView(withId(R.id.review)).perform(click());
+            assertToolbarIcon(scenario,false);
             onView(withId(R.id.action)).perform(scrollTo(), click());
             onView(withId(R.id.title)).check(matches(withText(R.string.progress)));
+            assertToolbarIcon(scenario,true);
             onView(withId(R.id.settings)).perform(click());
             onView(withId(R.id.title)).check(matches(withText(R.string.settings)));
+            assertToolbarIcon(scenario,true);
             awaitDictionary(scenario);
             onView(withId(R.id.panel_title)).check(matches(anyOf(
                     withText(R.string.no_installed_dictionary),withText(R.string.dictionary_available))));
-            pressBack();
+            onView(withContentDescription(R.string.back)).perform(click());
             onView(withId(R.id.title)).check(matches(withText(R.string.progress)));
-            pressBack();
+            assertToolbarIcon(scenario,true);
+            onView(withContentDescription(R.string.back)).perform(click());
             onView(withId(R.id.title)).check(matches(withText(R.string.review)));
+            assertToolbarIcon(scenario,false);
+            onView(withId(R.id.navigation)).check(matches(isDisplayed()));
         }
+    }
+
+    private static void assertToolbarIcon(ActivityScenario<MainActivity> scenario, boolean expected) {
+        scenario.onActivity(activity -> {
+            MaterialToolbar toolbar = activity.findViewById(R.id.toolbar);
+            if (expected) {
+                assertNotNull(toolbar.getNavigationIcon());
+            } else {
+                assertNull(toolbar.getNavigationIcon());
+            }
+        });
     }
 
     @Test public void collectionsSurvivesRecreationAndReturnsToVocabulary() {

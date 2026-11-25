@@ -104,8 +104,12 @@ public final class MainActivity extends AppCompatActivity {
         Screen screen = model.screen();
         boolean nested = screen.parent() != screen || screen == Screen.SETTINGS;
         back.setEnabled(screen != Screen.SEARCH);
-        toolbar.setNavigationIcon(nested ? R.drawable.ic_back : 0);
-        if (nested) toolbar.setNavigationContentDescription(R.string.back);
+        if (nested) {
+            toolbar.setNavigationIcon(R.drawable.ic_back);
+            toolbar.setNavigationContentDescription(R.string.back);
+        } else {
+            toolbar.setNavigationIcon(null);
+        }
         toolbar.getMenu().findItem(R.id.settings).setVisible(screen != Screen.SETTINGS);
         navigation.setVisibility(nested ? View.GONE : View.VISIBLE);
         if (!nested) {

@@ -17,6 +17,23 @@ python -m unittest discover -s research/prototypes/sqlite_poc -v
 
 На Windows для проверки минимального API откройте **Tools → Device Manager → Create Virtual Device**, выберите телефон и образ **Android 10 / API 29, Google APIs x86_64**. Если образ отсутствует, установите его через Device Manager или SDK Manager. Запустите AVD, проверьте, что `adb devices -l` показывает `device`, и выполните `.\gradlew.bat connectedDebugAndroidTest`. Можно использовать подключённый Android 10 с USB-отладкой. Наличие платформы компиляции SDK 37 само по себе не даёт образа Android 10.
 
+## Регрессия BUG-001
+
+`NavigationTest.launchShowsDictionaryStateAndTabsSwitchSections` запускает `MainActivity`, проверяет корневой экран, нижнюю навигацию и отсутствие иконки возврата. `settingsReturnsToProgressThenBackToReview` проходит маршрут «Повторение → Прогресс → Настройки → Прогресс → Повторение». Тест проверяет, что стрелка появляется на вложенных экранах, обрабатывает нажатия и исчезает после возврата в корень.
+
+Для проверки поверх существующей установки подготовьте debug APK и малые искусственные пакеты V1/V2, проверьте единственное целевое устройство через ADB. Устанавливайте приложение через `adb install -r`. Для инструментального запуска на физическом устройстве оставляйте установленные APK и отключайте удаление при несовместимой подписи:
+
+```powershell
+.\gradlew.bat --gradle-user-home .gradle/verification `
+  -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true `
+  -Pandroid.experimental.testOptions.uninstallIncompatibleApks=false `
+  :app:connectedDebugAndroidTest
+```
+
+Проверяйте записи `AndroidRuntime` в буфере `crash` по процессу `app.lexiflow` с момента начала проверки. Для BUG-001 подтверждены два холодных запуска на Xiaomi 2502FRA65G с Android 16 (API 36) и 0 новых аварий LexiFlow в окне проверки. `assembleDebug` и `assembleDebugAndroidTest` завершились успешно. `testDebugUnitTest` — 11 из 11, `connectedDebugAndroidTest` — 10 из 10. Ошибок и пропусков в отчётах тестов нет. Минимальный Android 10 (API 29) требует отдельного прогона.
+
+`lintDebug` завершился с 0 ошибок и 3 прежними предупреждениями о версиях Lifecycle и Room. Первичная проверка выдала `PropertyEscape` для экранированного пути SDK в локальном `local.properties`. Повторный анализ использовал `ANDROID_HOME` вместо этой строки. Исходный файл восстановлен побайтно.
+
 ## Ручная приёмка
 
 - [ ] Откройте словарь в авиарежиме. Введите `zeta`, затем `zeta-demos`. Проверьте разные значения, поиск по форме и маркировку тестовых данных.

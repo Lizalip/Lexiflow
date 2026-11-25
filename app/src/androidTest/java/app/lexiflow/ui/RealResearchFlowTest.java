@@ -29,6 +29,7 @@ import static androidx.test.espresso.action.ViewActions.*;
 import static androidx.test.espresso.assertion.ViewAssertions.matches;
 import static androidx.test.espresso.matcher.ViewMatchers.*;
 import static org.hamcrest.Matchers.startsWith;
+import static org.hamcrest.Matchers.containsString;
 import static org.junit.Assert.*;
 import static org.junit.Assume.assumeTrue;
 
@@ -47,6 +48,7 @@ public class RealResearchFlowTest {
         try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
             awaitAvailable(scenario);
             onView(withId(R.id.research_banner)).check(matches(isDisplayed()));
+            onView(withId(R.id.research_banner)).check(matches(withText(containsString(view(scenario).corpusVersion()))));
             Log.i(TAG,"initial dictionary UI ms="+(SystemClock.elapsedRealtime()-launch));
             capture(scenario,"01-dictionary");
             onView(withId(R.id.direction)).perform(click());
@@ -70,7 +72,9 @@ public class RealResearchFlowTest {
             var article = view(scenario).entry();
             assertNotNull(article);
             assertTrue(article.senses().size()>1);
-            assertTrue(article.metadata().stream().anyMatch(row -> row.kind().equals("ipa")));
+            var ipa = article.metadata().stream().filter(row -> row.kind().equals("ipa")).findFirst().orElseThrow();
+            onView(withText(target.getString(R.string.metadata_line,target.getString(R.string.metadata_ipa),
+                    ipa.value(),ipa.attribution()))).check(matches(isDisplayed()));
             assertTrue(article.metadata().stream().anyMatch(row -> row.kind().equals("definition")));
             capture(scenario,"03-entry");
             onView(withText(target.getString(R.string.save_sense,hit.position()))).perform(scrollTo(),click());

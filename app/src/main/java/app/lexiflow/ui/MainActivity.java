@@ -46,9 +46,9 @@ public final class MainActivity extends AppCompatActivity {
         super.onCreate(savedState);
         WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
         setContentView(R.layout.activity_main);
-        if (LocalDictionaryRepository.isResearchProfile(this)) {
-            findViewById(R.id.research_banner).setVisibility(View.VISIBLE);
-        }
+        TextView researchBanner = findViewById(R.id.research_banner);
+        boolean researchProfile = LocalDictionaryRepository.isResearchProfile(this);
+        if (researchProfile) researchBanner.setVisibility(View.VISIBLE);
         View root = findViewById(R.id.root);
         ViewCompat.setOnApplyWindowInsetsListener(root, (view, insets) -> {
             Insets safe = insets.getInsets(WindowInsetsCompat.Type.systemBars()
@@ -97,7 +97,13 @@ public final class MainActivity extends AppCompatActivity {
         findViewById(R.id.action).setOnClickListener(v -> open(model.screen().detail()));
         getOnBackPressedDispatcher().addCallback(this, back);
         findViewById(R.id.direction).setOnClickListener(v -> model.toggleDirection());
-        model.dictionaryView.observe(this, view -> renderDictionary());
+        model.dictionaryView.observe(this, view -> {
+            if (researchProfile && view.corpusVersion() != null) {
+                researchBanner.setText(getString(R.string.research_corpus_version_notice,
+                        getString(R.string.research_corpus_notice),view.corpusVersion()));
+            }
+            renderDictionary();
+        });
         model.personalView.observe(this, view -> renderPersonal());
         model.personalError.observe(this, error -> {
             if (Boolean.TRUE.equals(error)) {
@@ -260,6 +266,8 @@ public final class MainActivity extends AppCompatActivity {
         addAction(rows,getString(R.string.save_entry),() -> model.save(entry,null));
         boolean research = LocalDictionaryRepository.isResearchProfile(this);
         if (!research) addMetadata(rows,entry.metadata(),false);
+        else addMetadata(rows,entry.metadata().stream().filter(MainActivity::pronunciationMetadata)
+                .collect(java.util.stream.Collectors.toList()),false);
         if (!entry.forms().isEmpty()) {
             TextView forms = (TextView)getLayoutInflater().inflate(R.layout.entry_forms,rows,false);
             var text = new StringBuilder(getString(R.string.word_forms));
@@ -289,7 +297,8 @@ public final class MainActivity extends AppCompatActivity {
             }
             addAction(rows,getString(R.string.save_sense,sense.position()),() -> model.save(entry,sense));
         }
-        if (research) addMetadata(rows,entry.metadata(),true);
+        if (research) addMetadata(rows,entry.metadata().stream().filter(value -> !pronunciationMetadata(value))
+                .collect(java.util.stream.Collectors.toList()),true);
         TextView credit = inflateArticleDetail(rows);
         credit.setText(entry.attribution());
         rows.addView(credit);
@@ -297,6 +306,10 @@ public final class MainActivity extends AppCompatActivity {
 
     private TextView inflateArticleDetail(LinearLayout rows) {
         return (TextView)getLayoutInflater().inflate(R.layout.article_detail,rows,false);
+    }
+
+    private static boolean pronunciationMetadata(DictionaryRepository.Metadata value) {
+        return "ipa".equals(value.kind()) || "pronunciation".equals(value.kind());
     }
 
     private void addMetadata(LinearLayout rows,java.util.List<DictionaryRepository.Metadata> metadata,

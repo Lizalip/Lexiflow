@@ -117,5 +117,6 @@
     <string name="sort_by_recent">Сначала недавно сохранённые</string>
     <string name="sort_by_spelling">Сортировать по написанию</string>
     <string name="research_corpus_notice">Исследовательская версия · FreeDict EN–RU 2025.11.23 · CC BY-SA 3.0. Переводы источника ожидают редакторской проверки.</string>
+    <string name="research_corpus_version_notice">%1$s\nПакет %2$s</string>
     <string name="research_definition_note">Определение источника без привязки к переводу</string>
 </resources>

@@ -21,7 +21,7 @@ import java.util.function.Consumer;
 public final class FoundationViewModel extends ViewModel {
     private final SavedStateHandle state;
     record DictionaryView(DictionaryRepository.Status status, boolean synthetic,
-                          List<DictionaryRepository.Hit> hits, DictionaryRepository.Entry entry) {}
+                          List<DictionaryRepository.Hit> hits, DictionaryRepository.Entry entry, String corpusVersion) {}
     private LocalDictionaryRepository dictionary;
     private PersonalDatabase personal;
     private Handler main;
@@ -68,7 +68,7 @@ public final class FoundationViewModel extends ViewModel {
             refreshPersonal();
             return;
         }
-        dictionaryView.setValue(new DictionaryView(DictionaryRepository.Status.LOADING, false, Collections.emptyList(), null));
+        dictionaryView.setValue(new DictionaryView(DictionaryRepository.Status.LOADING,false,Collections.emptyList(),null,null));
         scheduled = () -> worker.execute(() -> {
             if (current != request) return;
             DictionaryView result;
@@ -76,9 +76,9 @@ public final class FoundationViewModel extends ViewModel {
                 dictionary.load();
                 List<DictionaryRepository.Hit> hits = screen == Screen.SEARCH ? dictionary.search(text,reverse) : Collections.emptyList();
                 DictionaryRepository.Entry entry = screen == Screen.ENTRY && entryId != null ? dictionary.entry(entryId) : null;
-                result = new DictionaryView(dictionary.status(),dictionary.isSynthetic(),hits,entry);
+                result = new DictionaryView(dictionary.status(),dictionary.isSynthetic(),hits,entry,dictionary.corpusVersion());
             } catch (RuntimeException failure) {
-                result = new DictionaryView(DictionaryRepository.Status.ERROR,false,Collections.emptyList(),null);
+                result = new DictionaryView(DictionaryRepository.Status.ERROR,false,Collections.emptyList(),null,null);
             }
             DictionaryView completed = result;
             main.post(() -> { if (current == request) dictionaryView.setValue(completed); });
@@ -175,7 +175,7 @@ public final class FoundationViewModel extends ViewModel {
     void installBundledV2() {
         ++request;
         if (scheduled != null) main.removeCallbacks(scheduled);
-        dictionaryView.setValue(new DictionaryView(DictionaryRepository.Status.LOADING,false,Collections.emptyList(),null));
+        dictionaryView.setValue(new DictionaryView(DictionaryRepository.Status.LOADING,false,Collections.emptyList(),null,null));
         worker.execute(() -> {
             try {
                 dictionary.installBundledV2();

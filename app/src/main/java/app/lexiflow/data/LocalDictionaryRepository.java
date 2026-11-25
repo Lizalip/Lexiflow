@@ -60,6 +60,7 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
     @Override public Status status() { return status; }
     @Override public Set<String> installedLanguages() { return status == Status.AVAILABLE ? LANGUAGES : Collections.emptySet(); }
     public boolean isSynthetic() { return manifest != null && manifest.version().startsWith("synthetic-"); }
+    public synchronized String corpusVersion() { return manifest == null ? null : manifest.version(); }
 
     public static boolean isResearchProfile(Context context) {
         String packageName = context.getPackageName();

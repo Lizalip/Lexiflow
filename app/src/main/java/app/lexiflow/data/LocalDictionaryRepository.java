@@ -479,30 +479,9 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
         if (database == null || query.codePointCount(0, query.length()) > 256) return Collections.emptyList();
         String key = SearchNormalization.normalize(query);
         if (key.isEmpty()) return Collections.emptyList();
-        String end = SearchNormalization.prefixEnd(key);
-        String range = "search_key>=?" + (end == null ? "" : " AND search_key<?");
-        String forward = "SELECT s.id AS sense_id,e.search_key FROM entry e JOIN sense s ON s.entry_id=e.id WHERE e." + range
-                + " UNION ALL SELECT s.id,f.search_key FROM form f JOIN sense s ON s.entry_id=f.entry_id WHERE f." + range;
-        String hits = reverse ? "SELECT sense_id,search_key FROM translation WHERE " + range : forward;
-        List<String> args = new ArrayList<>();
-        for (int i = 0; i < (reverse ? 1 : 2); i++) {
-            args.add(key);
-            if (end != null) args.add(end);
-        }
-        args.add(key);
-        args.add(key);
         List<Hit> results = new ArrayList<>();
-        String sql = "WITH hits AS (" + hits + "), grouped AS (SELECT sense_id,min(search_key) AS best FROM hits GROUP BY sense_id),"
-                + " selected AS (SELECT g.sense_id,g.best FROM grouped g JOIN sense s ON s.id=g.sense_id"
-                + " ORDER BY (g.best=?) DESC,g.best,s.entry_id,s.position,s.id LIMIT 50)"
-                + " SELECT e.id,s.id,e.spelling,e.pos,s.position,"
-                + "(SELECT t.wording FROM translation t WHERE t.sense_id=s.id "
-                + (reverse ? "AND t.search_key=g.best " : "")
-                + "ORDER BY t.search_key,t.wording,t.id LIMIT 1),"
-                + (reverse ? "NULL" : "(SELECT min(f.spelling) FROM form f WHERE f.entry_id=e.id AND f.search_key=g.best AND e.search_key<>g.best)")
-                + " FROM selected g JOIN sense s ON s.id=g.sense_id"
-                + " JOIN entry e ON e.id=s.entry_id ORDER BY (g.best=?) DESC,g.best,e.id,s.position,s.id";
-        try (Cursor cursor = database.rawQuery(sql,args.toArray(new String[0]))) {
+        var ranked = DictionarySearch.ranked(key,reverse);
+        try (Cursor cursor = database.rawQuery(ranked.sql(),ranked.arguments())) {
             while (cursor.moveToNext()) results.add(new Hit(cursor.getString(0),cursor.getString(1),
                     cursor.getString(2),cursor.getString(3),cursor.getInt(4),cursor.getString(5),cursor.getString(6)));
         }

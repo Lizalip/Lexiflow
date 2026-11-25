@@ -89,10 +89,8 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
         if (!validId(key)) throw new SQLiteException("invalid active key");
         File folder = new File(root,key);
         File manifestFile = new File(folder,"manifest.json");
-        try (InputStream json = new FileInputStream(manifestFile)) {
-            PackageManifest candidate = readManifest(json);
-            accept(openValidated(new File(folder,"dictionary.sqlite"),candidate),candidate);
-        }
+        var parsed = readFileManifest(manifestFile);
+        accept(openValidated(new File(folder,"dictionary.sqlite"),parsed,true),parsed.manifest());
         return manifestFile;
     }
 
@@ -152,12 +150,9 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
         boolean pointerWritten = false;
         try {
             writeCandidate(json,jsonFile,MAX_MANIFEST);
-            PackageManifest candidate;
-            try (InputStream metadata = new FileInputStream(jsonFile)) {
-                candidate = readManifest(metadata);
-            }
+            var candidate = readFileManifest(jsonFile);
             writeCandidate(db,dbFile,MAX_DATABASE);
-            candidateDb = openValidated(dbFile,candidate);
+            candidateDb = openValidated(dbFile,candidate,false);
             AtomicFile active = new AtomicFile(new File(root,"active"));
             FileOutputStream pointer = active.startWrite();
             try {
@@ -173,12 +168,13 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
                 pointerWritten = false;
                 throw new IOException("package pointer was not updated");
             }
-            accept(candidateDb,candidate);
+            accept(candidateDb,candidate.manifest());
             activated = true;
         } finally {
             if (!activated) {
                 if (candidateDb != null) candidateDb.close();
                 if (!pointerWritten) {
+                    receipt(dbFile).delete();
                     Files.deleteIfExists(dbFile.toPath());
                     Files.deleteIfExists(jsonFile.toPath());
                     Files.deleteIfExists(folder.toPath());
@@ -187,16 +183,25 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
         }
     }
 
-    private SQLiteDatabase openValidated(File file, PackageManifest candidate) throws IOException, JSONException {
+    private SQLiteDatabase openValidated(File file, ParsedManifest parsed, boolean allowReceipt) throws IOException, JSONException {
+        PackageManifest candidate = parsed.manifest();
         if (candidate.version().startsWith("synthetic-") && !debug()) {
             throw new UnsupportedOperationException("synthetic packages require a debug installation");
+        }
+        for (String sidecar : new String[]{"-wal","-shm","-journal"}) {
+            if (new File(file.getPath()+sidecar).exists()) throw new SQLiteException("unexpected database sidecar");
         }
         if (file.length() > MAX_DATABASE || !candidate.digest().equals(sha256(file))) {
             throw new SQLiteException("size or checksum mismatch");
         }
+        AtomicFile receipt = receipt(file);
+        String validation = "1\n" + (debug() ? "debug" : "apk") + "\n"
+                + android.os.Build.VERSION.SDK_INT + "\n" + android.os.Build.VERSION.INCREMENTAL + "\n"
+                + android.icu.lang.UCharacter.getUnicodeVersion() + "\n" + parsed.digest() + "\n" + candidate.digest();
         SQLiteDatabase opened = SQLiteDatabase.openDatabase(file.getPath(),null,SQLiteDatabase.OPEN_READONLY);
         try {
             if (opened.getVersion() != candidate.schema()) throw new UnsupportedOperationException("schema mismatch");
+            if (allowReceipt && matchesReceipt(receipt,validation)) return opened;
             if (!"ok".equals(scalar(opened,"PRAGMA integrity_check"))) throw new SQLiteException("integrity check");
             try (Cursor check = opened.rawQuery("PRAGMA foreign_key_check",null)) {
                 if (check.moveToFirst()) throw new SQLiteException("foreign key check");
@@ -269,10 +274,36 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
                     + "(SELECT 1 FROM translation t WHERE t.sense_id=s.id)"))
                     || !"0".equals(scalar(opened,"SELECT count(*) FROM entry e WHERE NOT EXISTS "
                     + "(SELECT 1 FROM sense s WHERE s.entry_id=e.id)"))) throw new SQLiteException("empty or incomplete corpus");
+            writeReceipt(receipt,validation);
             return opened;
         } catch (RuntimeException | JSONException failed) {
             opened.close();
             throw failed;
+        }
+    }
+
+    private static AtomicFile receipt(File database) {
+        return new AtomicFile(new File(database.getParentFile(),"validation-receipt"));
+    }
+
+    private static boolean matchesReceipt(AtomicFile receipt,String validation) {
+        try (InputStream input = receipt.openRead()) {
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream(256);
+            transfer(input,bytes,2048);
+            return validation.equals(new String(bytes.toByteArray(),StandardCharsets.UTF_8));
+        } catch (IOException ignored) {
+            return false;
+        }
+    }
+
+    private static void writeReceipt(AtomicFile receipt,String validation) {
+        FileOutputStream output = null;
+        try {
+            output = receipt.startWrite();
+            output.write(validation.getBytes(StandardCharsets.UTF_8));
+            receipt.finishWrite(output);
+        } catch (IOException ignored) {
+            if (output != null) receipt.failWrite(output);
         }
     }
 
@@ -364,6 +395,16 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
         }
     }
 
+    private record ParsedManifest(PackageManifest manifest,String digest) {}
+
+    private static ParsedManifest readFileManifest(File file) throws IOException, JSONException {
+        MessageDigest digest = newDigest();
+        try (InputStream json = new DigestInputStream(new FileInputStream(file),digest)) {
+            PackageManifest manifest = readManifest(json);
+            return new ParsedManifest(manifest,hexDigest(digest.digest()));
+        }
+    }
+
     private static String readPointer(AtomicFile active) throws IOException {
         try (InputStream input = active.openRead()) {
             ByteArrayOutputStream bytes = new ByteArrayOutputStream(36);
@@ -403,20 +444,28 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
     }
 
     private static String sha256(InputStream input) throws IOException {
+        MessageDigest digest = newDigest();
+        DigestInputStream hashing = new DigestInputStream(input,digest);
+        byte[] buffer = new byte[32768];
+        while (hashing.read(buffer) != -1) { /* digest updated by stream */ }
+        return hexDigest(digest.digest());
+    }
+
+    private static MessageDigest newDigest() {
         try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            DigestInputStream hashing = new DigestInputStream(input,digest);
-            byte[] buffer = new byte[32768];
-            while (hashing.read(buffer) != -1) { /* digest updated by stream */ }
-            StringBuilder hex = new StringBuilder(64);
-            for (byte value : digest.digest()) {
-                hex.append(Character.forDigit((value & 0xff) >>> 4,16));
-                hex.append(Character.forDigit(value & 15,16));
-            }
-            return hex.toString();
+            return MessageDigest.getInstance("SHA-256");
         } catch (NoSuchAlgorithmException impossible) {
             throw new AssertionError(impossible);
         }
+    }
+
+    private static String hexDigest(byte[] digest) {
+        StringBuilder hex = new StringBuilder(64);
+        for (byte value : digest) {
+            hex.append(Character.forDigit((value & 0xff) >>> 4,16));
+            hex.append(Character.forDigit(value & 15,16));
+        }
+        return hex.toString();
     }
 
     private void accept(SQLiteDatabase opened, PackageManifest candidate) {

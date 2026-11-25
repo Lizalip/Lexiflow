@@ -42,6 +42,8 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
     private volatile Status status = Status.MISSING;
     private SQLiteDatabase database;
     private PackageManifest manifest;
+    private File openFolder;
+    private String openManifestDigest;
     private boolean loadAttempted;
 
     public LocalDictionaryRepository(Context context) {
@@ -53,6 +55,12 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
     public boolean isSynthetic() { return manifest != null && manifest.version().startsWith("synthetic-"); }
 
     public synchronized void load() {
+        synchronized (DictionaryPackageStore.LOCK) {
+            loadLocked();
+        }
+    }
+
+    private void loadLocked() {
         if (database != null || loadAttempted) return;
         loadAttempted = true;
         status = Status.LOADING;
@@ -80,17 +88,43 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
     }
 
     private File openActive(File root) throws IOException, JSONException {
-        String key;
-        try {
-            key = readPointer(new AtomicFile(new File(root,"active")));
-        } catch (FileNotFoundException absent) {
+        var state = DictionaryPackageStore.read(root);
+        if (state.active() == null) {
+            DictionaryPackageStore.prune(root,state);
             return null;
         }
-        if (!validId(key)) throw new SQLiteException("invalid active key");
+        File manifestFile;
+        try {
+            manifestFile = openStored(root,state.active());
+        } catch (IOException | JSONException | RuntimeException activeFailure) {
+            if (state.previous() == null) throw activeFailure;
+            try {
+                manifestFile = openStored(root,state.previous());
+            } catch (IOException | JSONException | RuntimeException fallbackFailure) {
+                activeFailure.addSuppressed(fallbackFailure);
+                throw activeFailure;
+            }
+            var recovered = new DictionaryPackageStore.State(state.previous(),null);
+            try {
+                DictionaryPackageStore.write(root,recovered);
+                state = recovered;
+            } catch (IOException | RuntimeException ignored) {
+                // The previous package is still open. Leave both paths untouched.
+                return manifestFile;
+            }
+        }
+        DictionaryPackageStore.prune(root,state);
+        return manifestFile;
+    }
+
+    private File openStored(File root,String key) throws IOException, JSONException {
         File folder = new File(root,key);
+        if (!Files.isDirectory(folder.toPath(),java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+            throw new IOException("missing package directory");
+        }
         File manifestFile = new File(folder,"manifest.json");
         var parsed = readFileManifest(manifestFile);
-        accept(openValidated(new File(folder,"dictionary.sqlite"),parsed,true),parsed.manifest());
+        accept(openValidated(new File(folder,"dictionary.sqlite"),parsed,true),parsed,folder);
         return manifestFile;
     }
 
@@ -98,7 +132,7 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
         String path = "dictionary-release";
         if (active != null) {
             try (InputStream bundled = context.getAssets().open(path+"/manifest.json")) {
-                if (sha256(bundled).equals(sha256(active))) return true;
+                if (sha256(bundled).equals(openManifestDigest)) return true;
             } catch (FileNotFoundException absent) {
                 return false;
             }
@@ -118,12 +152,12 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
 
     public synchronized void installBundledV2() throws IOException, JSONException {
         if (!debug()) throw new IOException("bundled V2 unavailable");
-        try (InputStream json = context.getAssets().open("dictionary-v2/manifest.json")) {
-            PackageManifest bundled = readManifest(json);
-            if (database != null && bundled.format() == manifest.format() && bundled.schema() == manifest.schema()
-                    && bundled.version().equals(manifest.version()) && bundled.digest().equals(manifest.digest())) return;
+        synchronized (DictionaryPackageStore.LOCK) {
+            try (InputStream json = context.getAssets().open("dictionary-v2/manifest.json")) {
+                if (sha256(json).equals(openManifestDigest)) return;
+            }
+            if (!installAsset("dictionary-v2")) throw new IOException("bundled V2 unavailable");
         }
-        if (!installAsset("dictionary-v2")) throw new IOException("bundled V2 unavailable");
     }
 
     private boolean debug() {
@@ -136,49 +170,41 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
 
     public synchronized void install(InputStream json, InputStream db) throws IOException, JSONException {
         if (!debug()) throw new UnsupportedOperationException("local installation is debug only");
-        installPackage(json,db);
+        synchronized (DictionaryPackageStore.LOCK) {
+            installPackage(json,db);
+        }
     }
 
     private void installPackage(InputStream json, InputStream db) throws IOException, JSONException {
         File root = packageRoot();
+        if (database == null) {
+            try { openActive(root); }
+            catch (IOException | JSONException | RuntimeException ignored) {
+                // An unusable old state cannot prevent a fresh, verified activation.
+            }
+        }
         File folder = new File(root, UUID.randomUUID().toString());
         Files.createDirectories(folder.toPath());
         File jsonFile = new File(folder, "manifest.json");
         File dbFile = new File(folder, "dictionary.sqlite");
         SQLiteDatabase candidateDb = null;
         boolean activated = false;
-        boolean pointerWritten = false;
+        boolean pointerAttempted = false;
         try {
             writeCandidate(json,jsonFile,MAX_MANIFEST);
             var candidate = readFileManifest(jsonFile);
             writeCandidate(db,dbFile,MAX_DATABASE);
             candidateDb = openValidated(dbFile,candidate,false);
-            AtomicFile active = new AtomicFile(new File(root,"active"));
-            FileOutputStream pointer = active.startWrite();
-            try {
-                pointer.write(folder.getName().getBytes(StandardCharsets.UTF_8));
-                active.finishWrite(pointer);
-                pointerWritten = true;
-            } catch (IOException failed) {
-                active.failWrite(pointer);
-                throw failed;
-            }
-            String installedKey = readPointer(active);
-            if (!folder.getName().equals(installedKey)) {
-                pointerWritten = false;
-                throw new IOException("package pointer was not updated");
-            }
-            accept(candidateDb,candidate.manifest());
+            var state = new DictionaryPackageStore.State(folder.getName(),openFolder == null ? null : openFolder.getName());
+            pointerAttempted = true;
+            DictionaryPackageStore.write(root,state);
+            accept(candidateDb,candidate,folder);
             activated = true;
+            DictionaryPackageStore.prune(root,state);
         } finally {
             if (!activated) {
                 if (candidateDb != null) candidateDb.close();
-                if (!pointerWritten) {
-                    receipt(dbFile).delete();
-                    Files.deleteIfExists(dbFile.toPath());
-                    Files.deleteIfExists(jsonFile.toPath());
-                    Files.deleteIfExists(folder.toPath());
-                }
+                if (!pointerAttempted) DictionaryPackageStore.removeCandidate(folder);
             }
         }
     }
@@ -405,14 +431,6 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
         }
     }
 
-    private static String readPointer(AtomicFile active) throws IOException {
-        try (InputStream input = active.openRead()) {
-            ByteArrayOutputStream bytes = new ByteArrayOutputStream(36);
-            transfer(input,bytes,36);
-            return new String(bytes.toByteArray(),StandardCharsets.UTF_8);
-        }
-    }
-
     private static void writeCandidate(InputStream input,File file,long limit) throws IOException {
         try (FileOutputStream output = new FileOutputStream(file)) {
             transfer(input,output,limit);
@@ -468,10 +486,13 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
         return hex.toString();
     }
 
-    private void accept(SQLiteDatabase opened, PackageManifest candidate) {
-        if (database != null) database.close();
+    private void accept(SQLiteDatabase opened,ParsedManifest candidate,File folder) {
+        closeActive();
         database = opened;
-        manifest = candidate;
+        openFolder = folder;
+        DictionaryPackageStore.opened(folder);
+        manifest = candidate.manifest();
+        openManifestDigest = candidate.digest();
         status = Status.AVAILABLE;
     }
 
@@ -551,9 +572,18 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
 
     public synchronized void close() {
         loadAttempted = false;
+        synchronized (DictionaryPackageStore.LOCK) {
+            closeActive();
+        }
+    }
+
+    private void closeActive() {
         if (database != null) {
             database.close();
+            DictionaryPackageStore.closed(openFolder);
             database = null;
+            openFolder = null;
+            openManifestDigest = null;
             manifest = null;
             status = Status.MISSING;
         }

@@ -1,7 +1,7 @@
 """Measure exact and prefix queries against an actual local research pair."""
 import argparse
 import json
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 from statistics import median
 from time import perf_counter
@@ -10,6 +10,7 @@ from editor_workspace import diagnostic_alignment
 from prototype import normalize, prefix_end
 from release_package import connect, read_manifest
 from research_package import CORE, DATA, screen, verified_release
+from sense_context import direct_child
 
 QUERIES = {
     'basic': 'apple,book,house,water,friend,school,beautiful',
@@ -55,6 +56,49 @@ def metadata(db,rows,notes):
     ):
         fields[table] = db.execute(f'SELECT count(*) FROM {table} WHERE {owner} IN ({placeholders})',tuple(identities)).fetchone()[0]
     return fields
+
+
+def sense_evidence(db,sense):
+    definitions = {normalize(body) for body, in db.execute(
+        "SELECT body FROM gloss WHERE sense_id=? AND lang='en' AND role='definition'", (sense,))}
+    forms = {key for key, in db.execute(
+        "SELECT f.search_key FROM form f JOIN sense s ON s.entry_id=f.entry_id WHERE s.id=?", (sense,))}
+    return definitions,forms
+
+
+def nested_definitions(db,sense):
+    rows = db.execute("""
+        SELECT g.body,p.locator,c.locator,d.locator FROM sense s
+        JOIN evidence p ON p.id=s.evidence_id
+        JOIN sense child ON child.entry_id=s.entry_id
+          AND json_extract(child.raw_tags,'$.parent_sense_id')=s.id
+        JOIN evidence c ON c.id=child.evidence_id AND c.release_id=p.release_id
+        JOIN gloss g ON g.sense_id=child.id AND g.lang='en' AND g.role='definition'
+        JOIN evidence d ON d.id=g.evidence_id AND d.release_id=p.release_id
+        WHERE s.id=? AND c.rights!='excluded' AND d.rights!='excluded'
+    """,(sense,))
+    return {normalize(body) for body,parent,child,definition in rows if direct_child(parent,child,definition)}
+
+
+def alignment_summary(free,kaikki,active):
+    proposed,counts = diagnostic_alignment(free,kaikki)
+    observed = Counter(freedict_child_definition=0,kaikki_definition=0,exact_definition_overlap=0,
+                       exact_child_definition_overlap=0,freedict_explicit_forms=0,kaikki_explicit_forms=0,
+                       exact_form_overlap=0)
+    in_package = [pair for pair in proposed if normalize(pair['spelling']) in active]
+    for pair in in_package:
+        left,right = pair['free_sense'],pair['kaikki_sense']
+        free_def,free_forms = sense_evidence(free,left)
+        kaikki_def,kaikki_forms = sense_evidence(kaikki,right)
+        children = nested_definitions(free,left)
+        observed.update(name for name,has_evidence in (
+            ('freedict_child_definition',children),('kaikki_definition',kaikki_def),
+            ('exact_definition_overlap',free_def & kaikki_def),('exact_child_definition_overlap',children & kaikki_def),
+            ('freedict_explicit_forms',free_forms),('kaikki_explicit_forms',kaikki_forms),
+            ('exact_form_overlap',free_forms & kaikki_forms),
+        ) if has_evidence)
+    return dict(counts=counts,selected=len(proposed),selected_in_package=len(in_package),imported=0,
+                observed_on_selected_pairs=dict(observed))
 
 
 def main():
@@ -107,10 +151,8 @@ def main():
                 snapshots = set(comparison.execute('SELECT sha256 FROM release'))
                 if snapshots != {(KAIKKI_SNAPSHOT,)}:
                     raise ValueError('comparison staging does not record the expected Kaikki snapshot')
-                proposed,counts = diagnostic_alignment(source,comparison)
                 active = {key for key, in db.execute('SELECT DISTINCT search_key FROM entry')}
-                result['source_alignment'] = dict(counts=counts,selected=len(proposed),
-                    selected_in_package=sum(normalize(row['spelling']) in active for row in proposed),imported=0)
+                result['source_alignment'] = alignment_summary(source,comparison,active)
         print(json.dumps(result,ensure_ascii=True,indent=2))
 
 

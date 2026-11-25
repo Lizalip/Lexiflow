@@ -7,6 +7,7 @@ import android.speech.tts.TextToSpeech;
 import android.speech.tts.Voice;
 import java.util.Comparator;
 import java.util.Set;
+import java.util.function.Predicate;
 
 /** Experimental English pronunciation via an already installed offline voice. */
 final class OfflinePronunciation implements AutoCloseable {
@@ -18,21 +19,24 @@ final class OfflinePronunciation implements AutoCloseable {
         engine = new TextToSpeech(context.getApplicationContext(), status -> main.post(() -> {
             if (engine == null) return;
             if (status == TextToSpeech.SUCCESS) {
-                Set<Voice> voices = engine.getVoices();
-                if (voices != null) {
-                    Voice voice = voices.stream().filter(v -> "en".equals(v.getLocale().getLanguage())
-                            && !v.isNetworkConnectionRequired()
-                            && (v.getFeatures() == null
-                            || !v.getFeatures().contains(TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED)))
-                            .min(Comparator.comparing(Voice::getName)).orElse(null);
-                    ready = voice != null && engine.setVoice(voice) == TextToSpeech.SUCCESS;
-                }
+                ready = activateOfflineEnglishVoice(engine.getVoices(),
+                        voice -> engine.setVoice(voice) == TextToSpeech.SUCCESS);
             }
             stateChanged.run();
         }));
     }
 
     boolean available() { return ready; }
+
+    static boolean activateOfflineEnglishVoice(Set<Voice> voices,Predicate<Voice> activate) {
+        return voices != null && voices.stream()
+                .filter(voice -> "en".equals(voice.getLocale().getLanguage())
+                        && !voice.isNetworkConnectionRequired()
+                        && (voice.getFeatures() == null
+                        || !voice.getFeatures().contains(TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED)))
+                .sorted(Comparator.comparing(Voice::getName))
+                .anyMatch(activate);
+    }
 
     boolean speak(String text) {
         return ready && engine.speak(text,TextToSpeech.QUEUE_FLUSH,null,"lexiflow-headword") == TextToSpeech.SUCCESS;

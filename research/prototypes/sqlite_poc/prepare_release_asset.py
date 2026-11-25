@@ -1,23 +1,62 @@
 """Stage a specifically authorized dictionary for the APK-signed release build."""
 import argparse
 import re
-import shutil
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from urllib.parse import urlsplit
 
 from release_package import MAX_DATABASE, MAX_MANIFEST, checksum, expand_attributions, validate_package
 
+FILES = {'manifest.json':MAX_MANIFEST,'dictionary.sqlite':MAX_DATABASE}
+
+
+def check_directory(directory):
+    if directory.is_symlink() or (directory.exists() and (not directory.is_dir() or any(
+            path.name not in FILES or path.is_symlink() or not path.is_file() for path in directory.iterdir()))):
+        raise ValueError('unexpected release backup contents')
+
+
+def clear_backup(backup):
+    check_directory(backup)
+    for filename in FILES:
+        (backup/filename).unlink(missing_ok=True)
+    backup.rmdir()
+
+
+def activate(candidate, destination, backup):
+    """Swap complete directory pairs in the same filesystem; never copy over a working pair."""
+    if backup.exists():
+        if destination.exists():
+            clear_backup(backup)
+        else:
+            backup.rename(destination)
+    if destination.exists():
+        destination.rename(backup)
+    try:
+        candidate.rename(destination)
+    except OSError:
+        if backup.exists() and not destination.exists():
+            backup.rename(destination)
+        raise
+    if backup.exists():
+        clear_backup(backup)
+
 
 def prepare(source, generated_root, approved_sha256):
     if not re.fullmatch('[0-9a-f]{64}',approved_sha256):
         raise ValueError('an explicitly approved manifest SHA-256 is required')
-    files = {'manifest.json':MAX_MANIFEST,'dictionary.sqlite':MAX_DATABASE}
     generated_root.mkdir(parents=True,exist_ok=True)
     destination = generated_root/'dictionary-release'
-    with TemporaryDirectory(dir=generated_root) as tmp:
-        candidate = Path(tmp)
-        for filename,limit in files.items():
+    backup = generated_root.parent/(generated_root.name+'-previous')
+    for path in (destination,backup):
+        check_directory(path)
+    # Keep the backup and incomplete workspace outside the Gradle assets root.
+    if backup.exists() and not destination.exists():
+        backup.rename(destination)
+    with TemporaryDirectory(dir=generated_root.parent) as tmp:
+        candidate = Path(tmp)/'validated-pair'
+        candidate.mkdir()
+        for filename,limit in FILES.items():
             path = source/filename
             if path.is_symlink() or not path.is_file() or path.stat().st_size > limit:
                 raise ValueError('invalid release asset input')
@@ -39,9 +78,7 @@ def prepare(source, generated_root, approved_sha256):
                        or row['license_id'].casefold() in ('synthetic','artificial-fixture')
                        for row in attrs.values())):
             raise ValueError('synthetic content cannot be supplied to a release build')
-        destination.mkdir(exist_ok=True)
-        for filename in files:
-            shutil.copyfile(candidate/filename,destination/filename)
+        activate(candidate,destination,backup)
 
 
 if __name__ == '__main__':

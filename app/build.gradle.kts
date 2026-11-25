@@ -6,7 +6,10 @@ val releaseDictionaryHash = providers.gradleProperty("lexiflow.approvedManifestS
 require((releaseDictionary == null) == (releaseDictionaryHash == null)) {
     "Pass both lexiflow.releaseDictionary and lexiflow.approvedManifestSha256"
 }
-val generatedReleaseAssets = layout.buildDirectory.dir("generated/approved-dictionary")
+require(releaseDictionaryHash == null || releaseDictionaryHash.matches(Regex("[0-9a-f]{64}"))) {
+    "lexiflow.approvedManifestSha256 must be a lowercase SHA-256"
+}
+val generatedReleaseAssets = layout.buildDirectory.dir("generated/approved-dictionary/${releaseDictionaryHash ?: "unused"}")
 if (releaseDictionary != null) {
     val source = rootProject.file(releaseDictionary)
     val pipeline = rootProject.file("research/prototypes/sqlite_poc")

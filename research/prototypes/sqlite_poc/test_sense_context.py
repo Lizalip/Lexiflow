@@ -2,13 +2,14 @@ import json
 import sqlite3
 import unittest
 from contextlib import closing
+from copy import deepcopy
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from debug_package import make
 from prototype import create_database
 from release_package import validate_package
-from sense_context import apply_decisions, export_context
+from sense_context import apply_decisions, export_context, validate_context
 
 
 class SenseContextTest(unittest.TestCase):
@@ -24,6 +25,36 @@ class SenseContextTest(unittest.TestCase):
             (root/'nested'/'manifest.json').write_text(json.dumps(nested),encoding='utf-8')
             with self.assertRaisesRegex(ValueError,'invalid source sense relationship'):
                 validate_package(root/'nested')
+
+    def test_context_rejects_wrong_source_snapshot_owner_and_definition(self):
+        with closing(sqlite3.connect(':memory:')) as db:
+            db.execute("CREATE TABLE sense(id TEXT, attribution_id TEXT)")
+            db.execute("INSERT INTO sense VALUES ('fixture-sense','parent')")
+            attrs = {
+                'parent': dict(source='fixture', snapshot='a'*64, locator='entry/1/sense/0'),
+                'owner': dict(source='fixture', snapshot='a'*64, locator='entry/1/sense/0/sense/0'),
+                'definition': dict(source='fixture', snapshot='a'*64, locator='entry/1/sense/0/sense/0/def/0'),
+            }
+            extension = dict(version=1,senses={
+                'fixture-sense': dict(relationship='direct-child',text='fixture definition',
+                                      language='en',owner='owner',definition='definition')
+            })
+            validate_context(db,extension,attrs)
+            for attr,field,value in (
+                ('owner','source','different origin'),
+                ('definition','snapshot','b'*64),
+                ('owner','locator','entry/2/sense/0/sense/0'),
+                ('definition','locator','entry/1/sense/0/sense/1/def/0'),
+            ):
+                with self.subTest(attr=attr,field=field):
+                    wrong = deepcopy(attrs)
+                    wrong[attr][field] = value
+                    with self.assertRaisesRegex(ValueError,'invalid source sense relationship'):
+                        validate_context(db,extension,wrong)
+            for omitted in ('owner','definition'):
+                with self.subTest(omitted=omitted):
+                    with self.assertRaisesRegex(ValueError,'invalid sense context row'):
+                        validate_context(db,extension,{k:v for k,v in attrs.items() if k != omitted})
 
     def test_missing_ambiguous_mismatched_and_denied_context(self):
         with closing(sqlite3.connect(':memory:')) as db:

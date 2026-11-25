@@ -61,6 +61,16 @@ public class IsolatedPersonalFlowTest {
             onView(withText(R.string.save)).perform(click());
             await(scenario,state -> state.saved().stream().anyMatch(item -> custom.equals(item.custom)
                     && note.equals(item.note)),"personal fields saved");
+            action(R.string.show_saved_notes);
+            await(scenario,state -> state.notesOnly() && state.rowCount() == 1,"note filter applied");
+            action(R.string.show_all_saved);
+            await(scenario,state -> !state.notesOnly() && state.savedCount() == 1,"note filter cleared");
+            onView(withId(R.id.saved_query)).perform(scrollTo(),replaceText("TEST NOTE"),closeSoftKeyboard());
+            await(scenario,state -> state.savedQuery().equals("TEST NOTE") && state.rowCount() == 1,"matches note");
+            onView(withId(R.id.saved_query)).perform(replaceText("*"),closeSoftKeyboard());
+            await(scenario,state -> state.savedQuery().equals("*") && state.rowCount() == 0,"literal wildcard");
+            onView(withId(R.id.saved_query)).perform(clearText(),closeSoftKeyboard());
+            await(scenario,state -> state.savedQuery().isEmpty() && state.rowCount() == 1,"search cleared");
             onView(withId(R.id.action)).perform(scrollTo(),click());
             await(scenario,state -> state.screen() == Screen.COLLECTIONS,"collections loaded");
             action(R.string.create_collection);
@@ -100,6 +110,8 @@ public class IsolatedPersonalFlowTest {
             onView(withId(R.id.body)).check(matches(withText("zeta-demo")));
             onView(withText(ratings[2])).perform(scrollTo(),click());
             await(scenario,state -> state.screen() == Screen.REVIEW && state.exercise() == null,"review queue completed");
+            onView(withId(R.id.panel_title)).check(matches(withText(R.string.review_session_finished)));
+            onView(withId(R.id.body)).check(matches(withText(context.getString(R.string.review_session_summary,2,2,0))));
             onView(withId(R.id.action)).perform(scrollTo(),click());
             await(scenario,state -> state.screen() == Screen.PROGRESS && state.reviewed() == 2
                     && state.successful() == 2,"reviews counted");
@@ -113,6 +125,19 @@ public class IsolatedPersonalFlowTest {
             onView(withId(R.id.vocabulary)).perform(click());
             await(reopened,state -> state.savedCount() == 1 && state.saved().stream().anyMatch(
                     item -> custom.equals(item.custom) && note.equals(item.note)), "data survived reopen and V2");
+            onView(withText(savedLabel)).check(matches(isDisplayed()));
+            onView(withId(R.id.action)).perform(scrollTo(),click());
+            await(reopened,state -> state.screen() == Screen.COLLECTIONS
+                    && state.collections().stream().anyMatch(item -> item.name.equals(renamed)), "collection survived reopen");
+            onView(withText(renamed)).perform(scrollTo(),click());
+            await(reopened,state -> state.collection() != 0 && state.saved().size() == 1,"membership survived reopen");
+            action(R.string.delete_collection);
+            onView(withText(R.string.remove)).perform(click());
+            await(reopened,state -> state.screen() == Screen.COLLECTIONS && state.collection() == 0
+                    && state.collections().isEmpty(),"collection deleted");
+            back();
+            await(reopened,state -> state.screen() == Screen.VOCABULARY && state.savedCount() == 1,
+                    "saved entry preserved after collection deletion");
             onView(withText(savedLabel)).check(matches(isDisplayed()));
         }
     }

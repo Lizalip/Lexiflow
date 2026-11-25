@@ -37,6 +37,7 @@
     <string name="dictionary_error">Не удалось прочитать словарь</string>
     <string name="dictionary_prompt">Введите запрос</string>
     <string name="dictionary_no_hits">Совпадений нет</string>
+    <string name="dictionary_no_hits_help">Проверьте направление перевода и написание или введите начало слова.\n%1$s</string>
     <string name="dictionary_hits">Совпадения</string>
     <string name="dictionary_synthetic">Искусственный набор для проверки приложения</string>
     <string name="dictionary_synthetic_pos">%1$s\nИскусственный набор для проверки приложения</string>
@@ -102,4 +103,16 @@
     <string name="personal_previous_page">Предыдущая страница</string>
     <string name="personal_next_page">Следующая страница</string>
     <string name="source_context">Контекст источника</string>
+    <string name="delete_collection">Удалить подборку</string>
+    <string name="confirm_delete_collection">Удалить эту подборку?</string>
+    <string name="delete_collection_message">Слова останутся в личном словаре. Связи с этой подборкой будут удалены.</string>
+    <string name="review_session_finished">Сессия завершена</string>
+    <string name="review_session_summary">Ответов: %1$d\nУспешных: %2$d\nНеуспешных: %3$d</string>
+    <string name="show_all_saved">Показать все записи</string>
+    <string name="show_saved_notes">Только с заметками</string>
+    <string name="no_saved_notes">Сохранённых записей с заметками пока нет.</string>
+    <string name="saved_query_hint">Поиск в личном словаре</string>
+    <string name="no_saved_matches">Совпадений среди сохранённых слов нет.</string>
+    <string name="sort_by_recent">Сначала недавно сохранённые</string>
+    <string name="sort_by_spelling">Сортировать по написанию</string>
 </resources>

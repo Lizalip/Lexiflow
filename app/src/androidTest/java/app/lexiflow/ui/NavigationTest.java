@@ -18,6 +18,7 @@ import static androidx.test.espresso.action.ViewActions.scrollTo;
 import static androidx.test.espresso.assertion.ViewAssertions.matches;
 import static androidx.test.espresso.matcher.ViewMatchers.*;
 import static org.hamcrest.Matchers.anyOf;
+import static org.hamcrest.Matchers.allOf;
 import static org.hamcrest.Matchers.startsWith;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.assertNotNull;
@@ -25,6 +26,46 @@ import static org.junit.Assert.assertNull;
 
 @RunWith(AndroidJUnit4.class)
 public class NavigationTest {
+    @Test public void measureSearchDebounceThroughResultLayout() throws InterruptedException {
+        try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
+            awaitDictionary(scenario);
+            boolean[] synthetic = {false};
+            scenario.onActivity(activity -> {
+                var view = new ViewModelProvider(activity).get(FoundationViewModel.class).dictionaryView.getValue();
+                synthetic[0] = view != null && view.synthetic();
+            });
+            org.junit.Assume.assumeTrue("synthetic debug dictionary required",synthetic[0]);
+            long[] elapsed = new long[3];
+            String[] keys = {"zeta-demo","zeta-demos","zeta"};
+            for (int i = 0; i < keys.length; i++) {
+                String key = keys[i];
+                int index = i;
+                CountDownLatch ready = new CountDownLatch(1);
+                scenario.onActivity(activity -> {
+                    var model = new ViewModelProvider(activity).get(FoundationViewModel.class);
+                    var root = activity.findViewById(R.id.root);
+                    long start = android.os.SystemClock.elapsedRealtime();
+                    root.getViewTreeObserver().addOnPreDrawListener(new android.view.ViewTreeObserver.OnPreDrawListener() {
+                        @Override public boolean onPreDraw() {
+                            var view = model.dictionaryView.getValue();
+                            if (view != null && view.status() == DictionaryRepository.Status.AVAILABLE
+                                    && !view.hits().isEmpty()) {
+                                root.getViewTreeObserver().removeOnPreDrawListener(this);
+                                elapsed[index] = android.os.SystemClock.elapsedRealtime()-start;
+                                ready.countDown();
+                            }
+                            return true;
+                        }
+                    });
+                    ((android.widget.EditText) activity.findViewById(R.id.query)).setText(key);
+                });
+                assertTrue("search results rendered",ready.await(5,TimeUnit.SECONDS));
+            }
+            java.util.Arrays.sort(elapsed);
+            android.util.Log.i("LexiFlowReceipt","search UI through pre-draw ms="+java.util.Arrays.toString(elapsed));
+        }
+    }
+
     @Test public void launchShowsDictionaryStateAndTabsSwitchSections() throws InterruptedException {
         try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
             onView(withId(R.id.title)).check(matches(withText(R.string.dictionary)));
@@ -48,7 +89,8 @@ public class NavigationTest {
             String draft = "Ёж — it's time";
             onView(withId(R.id.query)).perform(click(), replaceText(draft), closeSoftKeyboard());
             onView(withId(R.id.query)).check(matches(withText(draft)));
-            onView(withId(com.google.android.material.R.id.text_input_end_icon)).perform(click());
+            onView(allOf(withId(com.google.android.material.R.id.text_input_end_icon),
+                    isDescendantOfA(withId(R.id.query_box)))).perform(click());
             onView(withId(R.id.query)).check(matches(withText("")));
         }
     }

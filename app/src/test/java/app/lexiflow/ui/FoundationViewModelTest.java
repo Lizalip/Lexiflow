@@ -85,4 +85,21 @@ public class FoundationViewModelTest {
         model.back();
         assertEquals("", model.query());
     }
+
+    @Test public void savedQueryKeepsItsOwnDraftAndTreatsGlobSyntaxLiterally() {
+        SavedStateHandle state = new SavedStateHandle();
+        FoundationViewModel model = new FoundationViewModel(state);
+        model.setQuery("dictionary");
+        model.setSavedQuery("  Ё[*]?  ");
+        model.open(Screen.VOCABULARY);
+        model.open(Screen.COLLECTIONS);
+        model.back();
+        FoundationViewModel restored = new FoundationViewModel(state);
+        assertEquals("dictionary",restored.query());
+        assertEquals("  Ё[*]?  ",restored.savedQuery());
+        assertEquals("*[ёЁ][[][*]][?]*",FoundationViewModel.savedPattern(restored.savedQuery()));
+        assertNull(FoundationViewModel.savedPattern(" "));
+        restored.setSavedQuery("");
+        assertEquals("",new FoundationViewModel(state).savedQuery());
+    }
 }

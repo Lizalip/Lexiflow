@@ -31,6 +31,7 @@ public final class MainActivity extends AppCompatActivity {
     private MaterialToolbar toolbar;
     private BottomNavigationView navigation;
     private TextInputEditText query;
+    private TextInputEditText savedQuery;
     private OfflinePronunciation pronunciation;
     private Integer restoredPersonalScroll;
     private final OnBackPressedCallback back = new OnBackPressedCallback(false) {
@@ -69,6 +70,16 @@ public final class MainActivity extends AppCompatActivity {
             }
             @Override public void afterTextChanged(Editable text) {}
         });
+        savedQuery = findViewById(R.id.saved_query);
+        savedQuery.setText(model.savedQuery());
+        savedQuery.setSelection(savedQuery.length());
+        savedQuery.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s,int start,int count,int after) {}
+            @Override public void onTextChanged(CharSequence s,int start,int before,int count) {
+                model.setSavedQuery(s.toString());
+            }
+            @Override public void afterTextChanged(Editable text) {}
+        });
         navigation.setOnItemSelectedListener(item -> {
             int id = item.getItemId();
             open(id == R.id.search ? Screen.SEARCH : id == R.id.review ? Screen.REVIEW : Screen.VOCABULARY);
@@ -99,8 +110,10 @@ public final class MainActivity extends AppCompatActivity {
     private void open(Screen screen) {
         rememberSearchPosition();
         restoredPersonalScroll = null;
-        getSystemService(InputMethodManager.class).hideSoftInputFromWindow(query.getWindowToken(), 0);
+        var input = savedQuery.hasFocus() ? savedQuery : query;
+        getSystemService(InputMethodManager.class).hideSoftInputFromWindow(input.getWindowToken(), 0);
         query.clearFocus();
+        savedQuery.clearFocus();
         model.open(screen);
         render();
     }
@@ -125,6 +138,7 @@ public final class MainActivity extends AppCompatActivity {
         setTitle(screen.title);
         findViewById(R.id.pair).setVisibility(screen == Screen.SEARCH || screen == Screen.SETTINGS ? View.VISIBLE : View.GONE);
         findViewById(R.id.query_box).setVisibility(screen == Screen.SEARCH ? View.VISIBLE : View.GONE);
+        findViewById(R.id.saved_query_box).setVisibility(screen == Screen.VOCABULARY ? View.VISIBLE : View.GONE);
         ((TextView) findViewById(R.id.panel_title)).setText(screen.heading);
         ((TextView) findViewById(R.id.body)).setText(screen.body);
         MaterialButton action = findViewById(R.id.action);
@@ -186,9 +200,13 @@ public final class MainActivity extends AppCompatActivity {
                     body.setText("");
                     return;
                 }
-                heading.setText(model.query().trim().isEmpty() ? R.string.dictionary_prompt
+                boolean empty = model.query().trim().isEmpty();
+                heading.setText(empty ? R.string.dictionary_prompt
                         : state.hits().isEmpty() ? R.string.dictionary_no_hits : R.string.dictionary_hits);
-                body.setText(state.synthetic() ? R.string.dictionary_synthetic : R.string.pair);
+                int dictionaryLabel = state.synthetic() ? R.string.dictionary_synthetic : R.string.pair;
+                if (!empty && state.hits().isEmpty()) {
+                    body.setText(getString(R.string.dictionary_no_hits_help,getString(dictionaryLabel)));
+                } else body.setText(dictionaryLabel);
                 for (var hit : state.hits()) {
                     String label = hit.spelling() + (hit.pos() == null ? "" : " · " + hit.pos())
                             + " · " + getString(R.string.sense_title, hit.position());
@@ -294,9 +312,17 @@ public final class MainActivity extends AppCompatActivity {
         body.setText(screen.body);
         switch (screen) {
             case VOCABULARY -> {
-                if (!state.saved().isEmpty()) {
+                if (state.savedCount() > 0) {
                     heading.setText(R.string.saved_heading);
-                    body.setText(getString(R.string.saved_count,state.savedCount()));
+                    if (state.rowCount() == 0 && !state.savedQuery().trim().isEmpty()) body.setText(R.string.no_saved_matches);
+                    else if (state.notesOnly() && state.rowCount() == 0) body.setText(R.string.no_saved_notes);
+                    else body.setText(getString(R.string.saved_count,state.rowCount()));
+                    addAction(rows,getString(state.notesOnly() ? R.string.show_all_saved : R.string.show_saved_notes),
+                            model::toggleNotesFilter);
+                    if (state.savedCount() > 1) {
+                        addAction(rows,getString(state.alphabetical() ? R.string.sort_by_recent : R.string.sort_by_spelling),
+                                model::toggleSavedOrder);
+                    }
                 }
                 addPageControls(rows,state);
                 for (var item : state.saved()) addAction(rows,savedLabel(item),() -> savedMenu(item,state));
@@ -359,7 +385,9 @@ public final class MainActivity extends AppCompatActivity {
     private void editSaved(PersonalDatabase.Saved item) {
         LinearLayout inputs = new LinearLayout(this);
         inputs.setOrientation(LinearLayout.VERTICAL);
-        inputs.setPadding(24,8,24,8);
+        int horizontal = getResources().getDimensionPixelSize(R.dimen.space_large);
+        int vertical = getResources().getDimensionPixelSize(R.dimen.space_small);
+        inputs.setPaddingRelative(horizontal,vertical,horizontal,vertical);
         EditText translation = new EditText(this);
         translation.setHint(R.string.custom_translation);
         translation.setText(item.custom);
@@ -426,6 +454,11 @@ public final class MainActivity extends AppCompatActivity {
         heading.setText(collection.name);
         body.setText(R.string.collection_items);
         addAction(rows,getString(R.string.rename_collection),() -> collectionName(collection));
+        addAction(rows,getString(R.string.delete_collection),() -> new MaterialAlertDialogBuilder(this)
+                .setTitle(R.string.confirm_delete_collection)
+                .setMessage(R.string.delete_collection_message)
+                .setNegativeButton(android.R.string.cancel,null)
+                .setPositiveButton(R.string.remove,(dialog,which) -> model.deleteCollection(collection.id)).show());
         addPageControls(rows,state);
         for (var item : state.saved()) {
             addAction(rows,savedLabel(item),() -> new MaterialAlertDialogBuilder(this).setTitle(item.spelling)
@@ -463,7 +496,15 @@ public final class MainActivity extends AppCompatActivity {
     }
 
     private void renderExercise(LinearLayout rows,TextView heading,TextView body,PersonalDatabase.Exercise exercise) {
-        if (exercise == null) return;
+        if (exercise == null) {
+            int reviewed = model.sessionReviewed();
+            if (reviewed > 0) {
+                heading.setText(R.string.review_session_finished);
+                body.setText(getString(R.string.review_session_summary,reviewed,model.sessionSuccessful(),
+                        reviewed-model.sessionSuccessful()));
+            }
+            return;
+        }
         heading.setText(exercise.reverse ? exercise.answer : exercise.spelling);
         if (!model.answerShown()) {
             body.setText(R.string.review_prompt);

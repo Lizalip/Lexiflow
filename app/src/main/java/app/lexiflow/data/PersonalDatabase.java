@@ -83,6 +83,14 @@ public abstract class PersonalDatabase extends RoomDatabase {
         @Query("SELECT * FROM saved ORDER BY id DESC LIMIT :limit OFFSET :offset")
         public abstract List<Saved> savedPage(int limit,int offset);
         @Query("SELECT count(*) FROM saved") public abstract int savedCount();
+        private static final String SAVED_FILTER = " FROM saved WHERE (:notesOnly = 0 OR note <> '') "
+                + "AND (:pattern IS NULL OR spelling GLOB :pattern OR answer GLOB :pattern "
+                + "OR custom GLOB :pattern OR note GLOB :pattern)";
+        @Query("SELECT count(*)" + SAVED_FILTER)
+        public abstract int filteredSavedCount(boolean notesOnly,String pattern);
+        @Query("SELECT *" + SAVED_FILTER + " ORDER BY CASE WHEN :alphabetical THEN spelling END COLLATE NOCASE,"
+                + " id DESC LIMIT :limit OFFSET :offset")
+        public abstract List<Saved> filteredSavedPage(boolean notesOnly,String pattern,boolean alphabetical,int limit,int offset);
         @Query("SELECT saved.* FROM members JOIN saved ON saved.id=members.savedId "
                 + "WHERE members.collectionId=:collection ORDER BY members.savedId DESC LIMIT :limit OFFSET :offset")
         public abstract List<Saved> collectionPage(long collection,int limit,int offset);
@@ -94,6 +102,7 @@ public abstract class PersonalDatabase extends RoomDatabase {
         @Query("DELETE FROM saved WHERE id=:id") public abstract void remove(long id);
         @Insert(onConflict = OnConflictStrategy.IGNORE) public abstract long create(Collection collection);
         @Query("UPDATE OR IGNORE collections SET name=:name WHERE id=:id") public abstract int rename(long id,String name);
+        @Query("DELETE FROM collections WHERE id=:id") public abstract int deleteCollection(long id);
         @Insert(onConflict = OnConflictStrategy.IGNORE) public abstract long addMember(Member membership);
         @Query("DELETE FROM members WHERE collectionId=:collection AND savedId=:saved") public abstract void removeMember(long collection,long saved);
         @Insert(onConflict = OnConflictStrategy.IGNORE) public abstract long addCard(Card card);

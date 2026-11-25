@@ -27,11 +27,13 @@ public final class FoundationViewModel extends ViewModel {
     private Handler main;
     private ExecutorService worker;
     private Runnable scheduled;
+    private Runnable scheduledPersonalSearch;
     private volatile int request;
     private volatile boolean disposed;
     final MutableLiveData<DictionaryView> dictionaryView = new MutableLiveData<>();
     static final int PERSONAL_PAGE_SIZE = 50;
     record PersonalView(Screen screen,long collection,int page,int rowCount,int savedCount,
+                        boolean notesOnly,String savedQuery,boolean alphabetical,
                         List<PersonalDatabase.Saved> saved, List<PersonalDatabase.Collection> collections,
                         PersonalDatabase.Exercise exercise,int cards,int due,int reviewed,int successful) {}
     final MutableLiveData<PersonalView> personalView = new MutableLiveData<>();
@@ -103,21 +105,29 @@ public final class FoundationViewModel extends ViewModel {
         Screen target = screen();
         long collection = collection();
         int requestedPage = personalPage(target);
+        boolean notesOnly = target == Screen.VOCABULARY && notesOnly();
+        boolean alphabetical = target == Screen.VOCABULARY && alphabetical();
+        String savedQuery = target == Screen.VOCABULARY ? savedQuery() : "";
         worker.execute(() -> {
             try {
                 PersonalDatabase.Library library = personal.library();
                 change.accept(library);
                 long now = System.currentTimeMillis();
                 int savedCount = target == Screen.VOCABULARY || target == Screen.PROGRESS ? library.savedCount() : 0;
-                int rowCount = target == Screen.VOCABULARY ? savedCount
+                String pattern = savedPattern(savedQuery);
+                boolean filtered = notesOnly || pattern != null;
+                int rowCount = target == Screen.VOCABULARY
+                        ? (filtered ? library.filteredSavedCount(notesOnly,pattern) : savedCount)
                         : target == Screen.COLLECTIONS && collection != 0 ? library.collectionSize(collection) : 0;
                 int page = Math.min(requestedPage, Math.max(0,(rowCount-1)/PERSONAL_PAGE_SIZE));
                 int offset = page * PERSONAL_PAGE_SIZE;
                 List<PersonalDatabase.Saved> saved = target == Screen.VOCABULARY
-                        ? library.savedPage(PERSONAL_PAGE_SIZE,offset)
+                        ? (filtered || alphabetical
+                                ? library.filteredSavedPage(notesOnly,pattern,alphabetical,PERSONAL_PAGE_SIZE,offset)
+                                : library.savedPage(PERSONAL_PAGE_SIZE,offset))
                         : target == Screen.COLLECTIONS && collection != 0
                         ? library.collectionPage(collection,PERSONAL_PAGE_SIZE,offset) : Collections.emptyList();
-                var snapshot = new PersonalView(target,collection,page,rowCount,savedCount,saved,
+                var snapshot = new PersonalView(target,collection,page,rowCount,savedCount,notesOnly,savedQuery,alphabetical,saved,
                         target == Screen.VOCABULARY || target == Screen.COLLECTIONS || target == Screen.PROGRESS
                                 ? library.collections() : Collections.emptyList(),
                         target == Screen.REVIEW ? library.next(now) : null,
@@ -127,8 +137,16 @@ public final class FoundationViewModel extends ViewModel {
                         target == Screen.PROGRESS ? library.successCount() : 0);
                 main.post(() -> {
                     if (disposed || target != screen() || collection != collection()
-                            || requestedPage != personalPage(target)) return;
-                    if (target == Screen.REVIEW) answerShown = false;
+                            || requestedPage != personalPage(target)
+                            || (target == Screen.VOCABULARY
+                            && (notesOnly != notesOnly() || alphabetical != alphabetical()
+                            || !savedQuery.equals(savedQuery())))) return;
+                    if (target == Screen.REVIEW) {
+                        answerShown = false;
+                        if (snapshot.exercise() == null && sessionReviewed() > 0) {
+                            state.set("reviewSessionFinished",true);
+                        }
+                    }
                     state.set(pageKey(target),page);
                     personalError.setValue(false);
                     personalView.setValue(snapshot);
@@ -201,10 +219,88 @@ public final class FoundationViewModel extends ViewModel {
         state.set(pageKey(screen()),page);
         refreshPersonal();
     }
+
+    private boolean notesOnly() { return Boolean.TRUE.equals(state.get("notesOnly")); }
+    private boolean alphabetical() { return Boolean.TRUE.equals(state.get("savedAlphabetical")); }
+
+    void toggleSavedOrder() {
+        state.set("savedAlphabetical",!alphabetical());
+        changePersonalPage(0);
+    }
+
+    String savedQuery() {
+        String value = state.get("savedQuery");
+        return value == null ? "" : value;
+    }
+
+    void setSavedQuery(String value) {
+        if (value.equals(savedQuery())) return;
+        state.set("savedQuery",value);
+        state.set(pageKey(Screen.VOCABULARY),0);
+        if (main == null) return;
+        if (scheduledPersonalSearch != null) main.removeCallbacks(scheduledPersonalSearch);
+        scheduledPersonalSearch = () -> {
+            if (screen() == Screen.VOCABULARY) refreshPersonal();
+        };
+        main.postDelayed(scheduledPersonalSearch,250);
+    }
+
+    static String savedPattern(String query) {
+        String cleaned = query.trim();
+        if (cleaned.isEmpty()) return null;
+        var pattern = new StringBuilder("*");
+        cleaned.codePoints().forEach(code -> {
+            int lower = Character.toLowerCase(code);
+            int upper = Character.toUpperCase(code);
+            if (lower != upper) {
+                pattern.append('[').appendCodePoint(lower).appendCodePoint(upper).append(']');
+            } else {
+                switch (code) {
+                    case '*' -> pattern.append("[*]");
+                    case '?' -> pattern.append("[?]");
+                    case '[' -> pattern.append("[[]");
+                    default -> pattern.appendCodePoint(code);
+                }
+            }
+        });
+        return pattern.append('*').toString();
+    }
+
+    void toggleNotesFilter() {
+        state.set("notesOnly",!notesOnly());
+        changePersonalPage(0);
+    }
     boolean answerShown() { return answerShown; }
     void revealAnswer() { answerShown = true; }
     void grade(PersonalDatabase.Exercise exercise,int rating) {
-        changePersonal(library -> library.grade(exercise,rating,System.currentTimeMillis(),ReviewScheduler::basic));
+        changePersonal(library -> {
+            if (library.grade(exercise,rating,System.currentTimeMillis(),ReviewScheduler::basic)) {
+                main.post(() -> { if (!disposed) recordReviewEvent(rating); });
+            }
+        });
+    }
+
+    void deleteCollection(long id) {
+        changePersonal(library -> {
+            library.deleteCollection(id);
+            main.post(() -> {
+                if (!disposed && screen() == Screen.COLLECTIONS && collection() == id) selectCollection(0);
+            });
+        });
+    }
+
+    void recordReviewEvent(int rating) {
+        boolean finished = Boolean.TRUE.equals(state.get("reviewSessionFinished"));
+        state.set("reviewSessionCount",(finished ? 0 : sessionReviewed())+1);
+        state.set("reviewSessionSuccess",(finished ? 0 : sessionSuccessful())+(rating > 0 ? 1 : 0));
+        state.set("reviewSessionFinished",false);
+    }
+
+    int sessionReviewed() { return sessionCount("reviewSessionCount"); }
+    int sessionSuccessful() { return sessionCount("reviewSessionSuccess"); }
+    private int sessionCount(String key) {
+        Integer count = state.get(key);
+        return count == null ? 0 : count;
     }
 
     @Override protected void onCleared() {
@@ -212,6 +308,7 @@ public final class FoundationViewModel extends ViewModel {
             disposed = true;
             ++request;
             if (scheduled != null) main.removeCallbacks(scheduled);
+            if (scheduledPersonalSearch != null) main.removeCallbacks(scheduledPersonalSearch);
             worker.execute(() -> { dictionary.close(); personal.close(); });
             worker.shutdown();
         }

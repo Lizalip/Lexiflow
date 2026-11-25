@@ -13,6 +13,7 @@ from prototype import NORMALIZATION_VERSION, integrity
 from review_queue import initialize
 
 FORMAT = 1
+COMPACT_FORMAT = 2
 DISTRIBUTION = """
 PRAGMA user_version=1;
 CREATE TABLE entry(id TEXT PRIMARY KEY NOT NULL, spelling TEXT NOT NULL, pos TEXT, search_key TEXT NOT NULL, attribution_id TEXT NOT NULL);
@@ -60,6 +61,42 @@ CREATE TABLE IF NOT EXISTS lexical_metadata(
 """
 RIGHTS_FIELDS = ('source_url','license_id','terms_url','attribution','modification','decision','reason','reviewer')
 ATTR_FIELDS = ('source_url','license_id','terms_url','attribution','modification')
+POLICY_FIELDS = ('source','snapshot','source_url','license_id','terms_url','attribution')
+
+
+def compact_attributions(records):
+    policies = {}
+    items = {}
+    for ref, record in sorted(records.items()):
+        key = tuple(record[field] for field in POLICY_FIELDS)
+        items[ref] = [policies.setdefault(key,len(policies)),record['locator'],record['modification']]
+    return [dict(zip(POLICY_FIELDS,key)) for key in policies], items
+
+
+def expand_attributions(policies, items):
+    if not isinstance(policies,list) or not isinstance(items,dict) or not policies:
+        raise ValueError('invalid compact attribution')
+    keys = set()
+    for policy in policies:
+        if (not isinstance(policy,dict) or set(policy) != set(POLICY_FIELDS)
+                or any(not isinstance(value,str) for value in policy.values())):
+            raise ValueError('invalid compact attribution policy')
+        keys.add(tuple(policy[field] for field in POLICY_FIELDS))
+    if len(keys) != len(policies):
+        raise ValueError('duplicate compact attribution policy')
+    records = {}
+    used = set()
+    for ref, item in items.items():
+        if (not isinstance(item,list) or len(item) != 3 or type(item[0]) is not int
+                or not 0 <= item[0] < len(policies)
+                or any(not isinstance(value,str) for value in item[1:])):
+            raise ValueError('invalid compact attribution link')
+        index, locator, modification = item
+        used.add(index)
+        records[ref] = dict(policies[index],locator=locator,modification=modification)
+    if len(used) != len(policies):
+        raise ValueError('unused compact attribution policy')
+    return records
 
 
 def valid_url(value):
@@ -220,7 +257,7 @@ def checksum(path):
         return digest.hexdigest()
 
 
-def export_package(src, registry, package, corpus_version, *, version=1):
+def export_package(src, registry, package, corpus_version, *, version=1, compact=False):
     if not isinstance(corpus_version,str) or not corpus_version.strip():
         raise ValueError('corpus version is required')
     schema, table_names = package_schema(version)
@@ -243,7 +280,16 @@ def export_package(src, registry, package, corpus_version, *, version=1):
                       language_pairs=['en-ru','ru-en'], counts=counts, database_sha256=checksum(database),
                       sources=sorted({(a['source'],a['snapshot'],a['source_url']) for a in attributions.values()}),
                       attributions=attributions)
-        manifest.write_text(json.dumps(result,ensure_ascii=True,sort_keys=True,indent=2)+'\n',encoding='utf-8')
+        if compact:
+            policies, links = compact_attributions(attributions)
+            result.update(package_format=COMPACT_FORMAT,policies=policies,attributions=links)
+            del attributions
+        with manifest.open('w',encoding='utf-8',newline='\n' if compact else None) as stream:
+            if compact:
+                json.dump(result,stream,ensure_ascii=True,sort_keys=True,separators=(',',':'))
+            else:
+                json.dump(result,stream,ensure_ascii=True,sort_keys=True,indent=2)
+            stream.write('\n')
         return validate_package(package)
     except BaseException:
         database.unlink(missing_ok=True)
@@ -272,8 +318,10 @@ def validate_package(package):
         raise ValueError('manifest must be an object')
     version = data.get('schema_version')
     schema, table_names = package_schema(version)
-    if (data.get('package_format'),data.get('normalization'),
-            data.get('language_pairs')) != (FORMAT,NORMALIZATION_VERSION,['en-ru','ru-en']):
+    package_format = data.get('package_format')
+    if (type(package_format) is not int or package_format not in (FORMAT,COMPACT_FORMAT)
+            or data.get('normalization') != NORMALIZATION_VERSION
+            or data.get('language_pairs') != ['en-ru','ru-en']):
         raise ValueError('unsupported dictionary package')
     for field in ('corpus_version','unicode_version'):
         if not isinstance(data.get(field),str) or not data[field].strip():
@@ -281,6 +329,8 @@ def validate_package(package):
     if checksum(database) != data.get('database_sha256'):
         raise ValueError('database checksum mismatch')
     attrs = data.get('attributions')
+    if package_format == COMPACT_FORMAT:
+        attrs = expand_attributions(data.get('policies'),attrs)
     if not isinstance(attrs,dict) or not attrs:
         raise ValueError('missing attribution')
     for ref, record in attrs.items():
@@ -340,6 +390,7 @@ def main():
         command = commands.add_parser(name)
         if name == 'export':
             command.add_argument('--schema-version',type=int,choices=(1,2),default=1)
+            command.add_argument('--compact',action='store_true',help='experimental Python-only manifest')
         if name == 'readiness':
             command.add_argument('--registry',type=Path)
         for arg in arguments:
@@ -380,7 +431,8 @@ def main():
             registry.execute('BEGIN')
             if registry.execute('SELECT version FROM identity_registry').fetchall() != [(1,)]:
                 raise ValueError('unsupported identity registry')
-            result = export_package(staging,registry,args.package,args.corpus_version,version=args.schema_version)
+            result = export_package(staging,registry,args.package,args.corpus_version,
+                                    version=args.schema_version,compact=args.compact)
     else:
         result = validate_package(args.package)
     print(json.dumps({'counts':result['counts'],'database_sha256':result['database_sha256']}))

@@ -1,14 +1,41 @@
 """Structural triage and ranking for local review. Scores never imply approval."""
+import csv
 import hashlib
+import io
 import re
-from collections import Counter
+from zipfile import ZipFile
 
-from prototype import normalize, snapshot_id
+from prototype import normalize
 
 POS = {'noun','verb','adj','adv','phrase','proverb'}
 FORM_TAGS = {'form-of','alt-of','no-gloss'}
 CYRILLIC = re.compile(r'[А-Яа-яЁё]')
 PHRASE = re.compile(r'^[А-Яа-яЁё]+(?:[- ][А-Яа-яЁё]+){0,3}$')
+SUBTLEX_MEMBER = 'SUBTLEXus74286wordstextversion.txt'
+MAX_FREQUENCY_BYTES = 4 * 1024**2
+
+
+def subtlex_frequency(path):
+    """Read observed lowercase form counts from the official SUBTLEX-US text release."""
+    if path.stat().st_size > MAX_FREQUENCY_BYTES:
+        raise ValueError('frequency archive exceeds 4 MiB')
+    with ZipFile(path) as archive:
+        members = archive.infolist()
+        if (len(members) != 1 or members[0].filename != SUBTLEX_MEMBER
+                or members[0].file_size > MAX_FREQUENCY_BYTES):
+            raise ValueError('unexpected frequency archive')
+        with io.TextIOWrapper(archive.open(members[0]),encoding='utf-8-sig') as stream:
+            reader = csv.DictReader(stream,delimiter='\t')
+            if not {'Word','FREQlow'} <= set(reader.fieldnames or ()):
+                raise ValueError('unexpected frequency columns')
+            counts = {}
+            for row in reader:
+                key = normalize(row['Word'])
+                count = int(row['FREQlow'])
+                if not key or count < 0:
+                    raise ValueError('invalid observed frequency')
+                counts[key] = max(count,counts.get(key,0))
+            return counts
 
 
 def triage(gloss, form_reference=False):
@@ -67,7 +94,7 @@ def evaluate(record, text):
     return None, (score,eligible,specialist,pos)
 
 
-def choose(stream, limit, seed, text, decode, stats):
+def choose(stream, limit, seed, text, decode, stats, *, frequency=None):
     best = {}
     for number, raw in enumerate(stream,1):
         if number > 250_000:
@@ -85,14 +112,22 @@ def choose(stream, limit, seed, text, decode, stats):
         score,eligible,specialist,pos = result
         spelling = normalize(record['word'])
         tie = hashlib.sha256(f'{seed}:{spelling}'.encode()).hexdigest()
-        ranking = (-score, bool(specialist), tie, number)
+        priority = (-score, bool(specialist))
+        if frequency is not None:
+            observed = frequency.get(spelling,0)
+            priority = (-observed, bool(specialist), -score, -min(eligible,3), pos)
+        ranking = (*priority, tie, number)
         previous = best.get(spelling)
         if previous is None or ranking < previous[0]:
             best[spelling] = (ranking,eligible,specialist,pos)
     stats['eligible_normalized_spellings'] = len(best)
-    selected = sorted(best.values())[:limit]
+    selected_words = sorted(best,key=lambda spelling:best[spelling])[:limit]
+    selected = [best[spelling] for spelling in selected_words]
     stats['selected_multiple_usable_senses'] = sum(row[1]>1 for row in selected)
     stats['selected_has_complex_sense'] = sum(row[2]>0 for row in selected)
     for _,_,_,pos in selected:
         stats['selected_pos_'+pos] += 1
-    return {row[0][3] for row in selected}
+    if frequency is not None:
+        stats['selected_frequency_observed'] = sum(frequency.get(key,0) > 0 for key in selected_words)
+        return set(selected_words)
+    return {row[0][-1] for row in selected}

@@ -5,7 +5,8 @@ import os
 import sqlite3
 from pathlib import Path
 from prototype import create_database, query_plan, release_lookup
-from kaikki import import_sample
+from candidate_rank import subtlex_frequency
+from kaikki import digest_file, import_sample
 from diagnostics import diagnostic_spellings
 
 
@@ -14,13 +15,21 @@ def main() -> None:
     parser.add_argument('source',type=Path)
     parser.add_argument('output',type=Path,help='New .sqlite file in an ignored local data directory')
     parser.add_argument('--limit',type=int,default=100)
-    parser.add_argument('--method', choices=('first', 'random', 'exact','ranked'), default='first')
+    parser.add_argument('--method', choices=('first', 'random', 'exact','ranked','frequency'), default='first')
+    parser.add_argument('--frequency',type=Path,help='official SUBTLEX-US text ZIP for frequency sampling')
     parser.add_argument('--seed', type=int, default=0)
     args = parser.parse_args()
     if args.output.suffix.lower() not in ('.sqlite','.db','.sqlite3'):
         parser.error('output must have a database suffix')
     if args.source.resolve() == args.output.resolve():
         parser.error('input and output must differ')
+    if (args.method == 'frequency') != bool(args.frequency):
+        parser.error('--frequency is required only for frequency sampling')
+    frequency = frequency_hash = None
+    if args.frequency:
+        frequency = subtlex_frequency(args.frequency)
+        with args.frequency.open('rb') as stream:
+            frequency_hash = digest_file(stream)
     # Exclusive creation prevents accidental replacement. Parent must already exist.
     fd = os.open(args.output,os.O_CREAT | os.O_EXCL | os.O_WRONLY,0o600)
     os.close(fd)
@@ -31,6 +40,7 @@ def main() -> None:
             report = import_sample(
                 conn, args.source, limit=args.limit, method=args.method, seed=args.seed,
                 targets=diagnostic_spellings() if args.method == 'exact' else None,
+                frequency=frequency,frequency_sha256=frequency_hash,
             )
             report['integrity_check'] = 'ok'
             report['foreign_key_violations'] = 0

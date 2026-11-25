@@ -14,9 +14,10 @@ from release_package import export_package
 from review_queue import initialize
 
 
-def make(output,count):
-    if type(count) is not int or not 1 <= count <= 20_000:
-        raise ValueError('synthetic scale must be 1..20,000')
+def make(output,count,*,compact=False):
+    maximum = 100_000 if compact else 20_000
+    if type(count) is not int or not 1 <= count <= maximum:
+        raise ValueError(f'synthetic scale must be 1..{maximum}')
     sha = hashlib.sha256(f'lexiflow-scale-v1/{count}'.encode()).hexdigest()
     with closing(sqlite3.connect(':memory:')) as src, closing(sqlite3.connect(':memory:')) as registry:
         create_database(src)
@@ -50,19 +51,20 @@ def make(output,count):
                 registry.executemany('INSERT INTO identity_binding VALUES (?,?,?,?,?,NULL,NULL)',[
                     ('entry',sha,entry,str(UUID(int=i*2-1)),'artificial only'),
                     ('sense',sha,sense,str(UUID(int=i*2)),'artificial only')])
-        return export_package(src,registry,output,f'synthetic-scale-{count}',version=2)
+        return export_package(src,registry,output,f'synthetic-scale-{count}',version=2,compact=compact)
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('output',type=Path)
     parser.add_argument('--entries',type=int,default=5000)
+    parser.add_argument('--compact',action='store_true')
     args = parser.parse_args()
     local_root = Path(__file__).resolve().parents[2]/'data'/'processed'
     if not args.output.resolve().is_relative_to(local_root.resolve()):
         parser.error('output must be under research/data/processed/')
     start = perf_counter()
-    result = make(args.output,args.entries)
+    result = make(args.output,args.entries,compact=args.compact)
     print(json.dumps(dict(counts=result['counts'], manifest_bytes=(args.output/'manifest.json').stat().st_size,
                           database_bytes=(args.output/'dictionary.sqlite').stat().st_size,
                           build_seconds=round(perf_counter()-start,3))))

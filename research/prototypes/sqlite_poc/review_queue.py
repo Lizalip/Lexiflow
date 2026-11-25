@@ -14,6 +14,7 @@ from candidate_rank import FORM_TAGS, triage
 
 CLASSES = {'source_gloss', 'candidate_translation', 'definition', 'form-reference',
            'unclear', 'mixed_gloss', 'unsuitable'}
+STRUCTURED_SOURCE = 'FreeDict / WikDict / DBnary / Wiktionary'
 IDENTITY = ('entry_id', 'sense_id', 'snapshot_sha256', 'locator')
 FIELDS = {*IDENTITY, 'classification', 'reason'}
 EDITOR_FIELDS = {'proposed_translation', 'decision', 'reviewer', 'method'}
@@ -21,9 +22,12 @@ GLOSS_ROWS = """
     SELECT e.id AS entry_id, s.id AS sense_id, r.sha256 AS snapshot_sha256,
            ev.locator, ev.rights, g.body AS gloss, e.spelling AS headword,
            e.pos, s.position AS sense_position, g.evidence_id, g.lang, g.id AS gloss_id,
-           s.raw_tags, (SELECT count(*) FROM gloss g2 WHERE g2.sense_id=s.id) AS gloss_count
+           src.name AS source,s.raw_tags,
+           (SELECT count(*) FROM gloss g2 WHERE g2.sense_id=s.id AND g2.role='source_gloss') AS gloss_count
     FROM gloss g JOIN sense s ON s.id=g.sense_id JOIN entry e ON e.id=s.entry_id
     JOIN evidence ev ON ev.id=g.evidence_id JOIN release r ON r.id=ev.release_id
+    JOIN source src ON src.id=r.source_id
+    WHERE g.role='source_gloss'
 """
 HISTORY = """
 CREATE TABLE IF NOT EXISTS semantic_decision(
@@ -59,6 +63,18 @@ def tasks(conn):
             SELECT x.body, xt.body FROM example x LEFT JOIN example_translation xt
             ON xt.example_id=x.id WHERE x.sense_id=? ORDER BY x.id,xt.id LIMIT 3
         """, (task['sense_id'],))]
+        task['definition_context'] = []
+        if task['source'] == STRUCTURED_SOURCE:
+            definitions = conn.execute("""SELECT body FROM gloss WHERE sense_id=? AND role='definition'
+                                        ORDER BY position""",(task['sense_id'],)).fetchall()
+            if not definitions:
+                children = conn.execute("""SELECT id FROM sense WHERE entry_id=?
+                    AND json_extract(raw_tags,'$.parent_sense_id')=? ORDER BY position""",
+                    (task['entry_id'],task['sense_id'])).fetchall()
+                if len(children) == 1:
+                    definitions = conn.execute("""SELECT body FROM gloss
+                        WHERE sense_id=? AND role='definition' ORDER BY position""",(children[0][0],)).fetchall()
+            task['definition_context'] = [row[0] for row in definitions]
         task.update(status='pending', classification=None, proposed_translation=None,
                     decision=None, reviewer=None, method=None, reason=None)
         yield task
@@ -73,6 +89,12 @@ def classify(task):
     if priority == 'standard' and task['gloss_count'] > 1:
         classification, priority, proposed, reason = (
             'unclear','specialist',None,'multiple gloss rows for the same source sense')
+    if task.get('source') == STRUCTURED_SOURCE:
+        if priority == 'standard' and len(task['definition_context']) == 1 and task['pos']:
+            reason = 'explicit Russian TEI translation with one candidate and one definition for context'
+        elif priority == 'standard':
+            classification, priority, proposed, reason = (
+                'unclear','specialist',None,'verify missing or ambiguous TEI definition or part of speech')
     return dict(task,classification=classification,review_priority=priority,proposed_translation=proposed,
                 decision='proposed',method='rule-assisted',reviewer='triage-v1',reason=reason)
 
@@ -111,6 +133,15 @@ def stratify(rows, limit, seed):
         queues = active
 
 
+def csv_cell(value):
+    if isinstance(value,(list,dict)):
+        value = json.dumps(value,ensure_ascii=False)
+    # Spreadsheet apps can interpret leading symbols as formulas.
+    if isinstance(value,str) and value.lstrip().startswith(('=','+','-','@')):
+        return "'" + value
+    return value
+
+
 def export_triage(conn, path, *, priority=None, limit=None, seed=42):
     rows = triage_rows(conn,priority)
     if limit is not None:
@@ -124,12 +155,7 @@ def export_triage(conn, path, *, priority=None, limit=None, seed=42):
                 if writer is None:
                     writer = csv.DictWriter(stream,fieldnames=list(row))
                     writer.writeheader()
-                def cell(value):
-                    if isinstance(value,(list,dict)):
-                        return json.dumps(value,ensure_ascii=False)
-                    # Spreadsheet apps can interpret leading symbols as formulas.
-                    return "'" + value if isinstance(value,str) and value.lstrip().startswith(('=','+','-','@')) else value
-                writer.writerow({key:cell(value) for key,value in row.items()})
+                writer.writerow({key:csv_cell(value) for key,value in row.items()})
             else:
                 stream.write(json.dumps(row,ensure_ascii=False)+'\n')
     return dict(stats)

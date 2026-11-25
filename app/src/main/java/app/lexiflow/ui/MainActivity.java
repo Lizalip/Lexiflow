@@ -109,7 +109,7 @@ public final class MainActivity extends AppCompatActivity {
 
     private void open(Screen screen) {
         rememberSearchPosition();
-        restoredPersonalScroll = null;
+        if (screen != Screen.SETTINGS) restoredPersonalScroll = null;
         var input = savedQuery.hasFocus() ? savedQuery : query;
         getSystemService(InputMethodManager.class).hideSoftInputFromWindow(input.getWindowToken(), 0);
         query.clearFocus();
@@ -356,7 +356,9 @@ public final class MainActivity extends AppCompatActivity {
             ScrollView scroll = findViewById(R.id.scroll);
             int position = restoredPersonalScroll;
             restoredPersonalScroll = null;
-            scroll.post(() -> scroll.scrollTo(0,position));
+            scroll.post(() -> {
+                if (model.screen() == screen) scroll.scrollTo(0,position);
+            });
         }
     }
 
@@ -369,7 +371,7 @@ public final class MainActivity extends AppCompatActivity {
         String[] options = getResources().getStringArray(R.array.saved_actions);
         new MaterialAlertDialogBuilder(this).setTitle(item.spelling).setItems(options,(dialog,choice) -> {
             switch (choice) {
-                case 0 -> { model.openSaved(item.entryId,item.senseId); render(); }
+                case 0 -> openSavedFromList(item);
                 case 1 -> editSaved(item);
                 case 2 -> chooseCollection(item,state);
                 case 3 -> addCard(item,false);
@@ -463,7 +465,7 @@ public final class MainActivity extends AppCompatActivity {
         for (var item : state.saved()) {
             addAction(rows,savedLabel(item),() -> new MaterialAlertDialogBuilder(this).setTitle(item.spelling)
                     .setNegativeButton(android.R.string.cancel,null)
-                    .setPositiveButton(R.string.open_saved,(d,w) -> { model.openSaved(item.entryId,item.senseId); render(); })
+                    .setPositiveButton(R.string.open_saved,(d,w) -> openSavedFromList(item))
                     .setNeutralButton(R.string.remove_from_collection,(d,w) ->
                             model.changePersonal(library -> library.removeMember(collection.id,item.id))).show());
         }
@@ -480,6 +482,12 @@ public final class MainActivity extends AppCompatActivity {
                 () -> openPersonalPage(state.page()-1));
         if ((state.page()+1)*size < state.rowCount()) addAction(rows,getString(R.string.personal_next_page),
                 () -> openPersonalPage(state.page()+1));
+    }
+
+    private void openSavedFromList(PersonalDatabase.Saved item) {
+        restoredPersonalScroll = findViewById(R.id.scroll).getScrollY();
+        model.openSaved(item.entryId,item.senseId);
+        render();
     }
 
     private void openPersonalPage(int page) {
@@ -538,6 +546,8 @@ public final class MainActivity extends AppCompatActivity {
         rememberSearchPosition();
         if (model.screen() == Screen.VOCABULARY || model.screen() == Screen.COLLECTIONS) {
             outState.putInt("personalScroll",findViewById(R.id.scroll).getScrollY());
+        } else if (restoredPersonalScroll != null) {
+            outState.putInt("personalScroll",restoredPersonalScroll);
         }
         super.onSaveInstanceState(outState);
     }

@@ -8,6 +8,7 @@ from pathlib import Path
 from uuid import UUID
 
 import identity
+from debug_package import make
 from kaikki import import_sample
 from prototype import create_database, normalize, query_plan, release_lookup, research_lookup
 from release_package import checksum, export_package, record_rights, validate_package
@@ -175,6 +176,20 @@ class ReleaseTests(unittest.TestCase):
 
 
 class IdentityTests(unittest.TestCase):
+    def test_debug_package_has_stable_artificial_content_and_shared_vectors(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            first = make(root/'one')
+            second = make(root/'two')
+            self.assertEqual(first,second)
+            self.assertEqual(first['corpus_version'],'synthetic-debug-v1')
+            self.assertEqual(first['counts']['entry'],3)
+            self.assertEqual(first['counts']['sense'],4)
+            self.assertEqual(first['counts']['example_translation'],1)
+            self.assertEqual(first['counts']['form'],1)
+            self.assertEqual((root/'one'/'normalization_vectors.json').read_bytes(),
+                             Path(__file__).with_name('normalization_vectors.json').read_bytes())
+
     def test_shared_invalid_scalar_vectors(self):
         vectors = json.loads(Path(__file__).with_name('normalization_vectors.json').read_text(encoding='utf-8'))
         for codepoint in vectors['invalid_codepoints']:

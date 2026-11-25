@@ -9,6 +9,7 @@ from urllib.parse import urlsplit
 from uuid import UUID
 
 import identity
+from sense_context import apply_decisions, export_context, validate_context
 from prototype import NORMALIZATION_VERSION, integrity
 from review_queue import initialize
 
@@ -246,7 +247,8 @@ def copy_eligible(src, dest, registry, version):
                     INSERT INTO lexical_metadata(entry_id,sense_id,form_id,kind,value,lang,attribution_id)
                     VALUES (?,?,?,?,?,?,?)
                 """, (*(mapping.get(key) for mapping,key in parents),kind,value,lang,attr(eid)))
-    return used
+    context = export_context(src,senses,rights,attr) if version == 2 else {}
+    return used, context
 
 
 def checksum(path):
@@ -271,7 +273,7 @@ def export_package(src, registry, package, corpus_version, *, version=1, compact
             dest.execute('PRAGMA foreign_keys=ON')
             dest.executescript(schema)
             with dest:
-                attributions = copy_eligible(src,dest,registry,version)
+                attributions, context = copy_eligible(src,dest,registry,version)
             integrity(dest)
             counts = {table:dest.execute(f'SELECT count(*) FROM {table}').fetchone()[0] for table in table_names}
         versions = dict(src.execute('SELECT key,value FROM metadata'))
@@ -280,6 +282,8 @@ def export_package(src, registry, package, corpus_version, *, version=1, compact
                       language_pairs=['en-ru','ru-en'], counts=counts, database_sha256=checksum(database),
                       sources=sorted({(a['source'],a['snapshot'],a['source_url']) for a in attributions.values()}),
                       attributions=attributions)
+        if context:
+            result['sense_context'] = dict(version=1,senses=context)
         if compact:
             policies, links = compact_attributions(attributions)
             result.update(package_format=COMPACT_FORMAT,policies=policies,attributions=links)
@@ -383,6 +387,10 @@ def validate_package(package):
             keys = (origin,translation,sense,entry)
             if origin not in attrs or len({(attrs[key]['source'],attrs[key]['snapshot']) for key in keys}) != 1:
                 raise ValueError('inconsistent origin attribution')
+        if 'sense_context' in data:
+            if version != 2:
+                raise ValueError('sense context requires schema 2')
+            validate_context(conn,data['sense_context'],attrs)
     return data
 
 
@@ -395,6 +403,7 @@ def main():
     commands = parser.add_subparsers(dest='command',required=True)
     for name, arguments in (
         ('rights', ('staging','decisions')),
+        ('context', ('staging','decisions')),
         ('bind', ('registry','decisions')),
         ('export', ('staging','registry','package','corpus_version')),
         ('validate', ('package',)),
@@ -403,7 +412,7 @@ def main():
         command = commands.add_parser(name)
         if name == 'export':
             command.add_argument('--schema-version',type=int,choices=(1,2),default=1)
-            command.add_argument('--compact',action='store_true',help='experimental Python-only manifest')
+            command.add_argument('--compact',action='store_true',help='compact attribution manifest')
         if name == 'readiness':
             command.add_argument('--registry',type=Path)
         for arg in arguments:
@@ -423,10 +432,15 @@ def main():
                     report = readiness(src,registry)
         print(json.dumps(report))
         return
-    if args.command in ('rights','bind'):
+    if args.command in ('rights','bind','context'):
         with args.decisions.open(encoding='utf-8') as stream:
             records = [json.loads(line) for line in stream]
-        if args.command == 'bind':
+        if args.command == 'context':
+            with connect(args.staging,'rw') as staging:
+                staging.execute('PRAGMA foreign_keys=ON')
+                apply_decisions(staging,records)
+            print(json.dumps({'context_decisions_processed':len(records)}))
+        elif args.command == 'bind':
             with connect(args.registry, 'rwc') as registry:
                 registry.executescript(identity.SCHEMA)
                 print(json.dumps({'bindings_added': identity.load_registry(registry,records)}))

@@ -174,6 +174,13 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
                 if (check.moveToFirst()) throw new SQLiteException("foreign key check");
             }
             for (String table : TABLES) checkTable(opened,candidate,table);
+            for (var entry : candidate.contexts().entrySet()) {
+                try (Cursor row = opened.rawQuery("SELECT attribution_id FROM sense WHERE id=?",new String[]{entry.getKey()})) {
+                    if (!row.moveToFirst() || !entry.getValue().belongsTo(candidate.attribution(row.getString(0)))) {
+                        throw new JSONException("invalid source sense relationship");
+                    }
+                }
+            }
             if (candidate.schema() == 2) {
                 checkMetadata(opened,candidate);
                 checkIndexColumns(opened,"translation_preview","translation","sense_id","search_key","wording");
@@ -455,7 +462,11 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
                             examples.add(new Example(ex.getString(0),ex.getString(1),credit));
                         }
                     }
-                    senses.add(new Sense(sid,rows.getInt(1),translations,examples,String.join("\n",credits),metadata(sid,true)));
+                    var link = manifest.contexts().get(sid);
+                    SenseContext context = link == null ? null : new SenseContext(link.text(),link.owner().locator(),
+                            link.definition().locator(),link.definition().displayCredit());
+                    senses.add(new Sense(sid,rows.getInt(1),translations,examples,String.join("\n",credits),
+                            metadata(sid,true),context));
                 }
             }
             return new Entry(id,entry.getString(0),entry.getString(1),senses,attribution(entry.getString(2)),metadata(id,false));

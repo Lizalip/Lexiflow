@@ -13,6 +13,7 @@ from kaikki import import_sample
 from prototype import create_database
 from release_package import STAGING_METADATA, export_package, record_rights
 from review_queue import IDENTITY, apply, tasks
+from sense_context import apply_decisions
 
 FIXTURES = [
     dict(word='zeta-demo', pos='noun', forms=[dict(form='zeta-demos')], senses=[
@@ -24,7 +25,9 @@ FIXTURES = [
 ]
 
 
-def make(output, version=1):
+def make(output, version=1, *, context=False):
+    if context and version != 2:
+        raise ValueError('context fixture requires schema 2')
     with TemporaryDirectory() as temp, closing(sqlite3.connect(':memory:')) as src, closing(sqlite3.connect(':memory:')) as registry:
         source = Path(temp)/'artificial.jsonl'
         source.write_text('\n'.join(json.dumps(dict(record,lang_code='en')) for record in FIXTURES)+'\n', encoding='utf-8')
@@ -59,6 +62,23 @@ def make(output, version=1):
                     VALUES (?,?,?,?,?,?,?)
                 """,(*owner,kind,value,lang,evidence))
             src.commit()
+        if context:
+            root = rows[0]['locator'].rsplit('/glosses/',1)[0]
+            owner = root+'/sense/0'
+            definition = owner+'/def/0'
+            with src:
+                owner_evidence = src.execute('INSERT INTO evidence(release_id,locator) VALUES (1,?)',
+                                             (owner,)).lastrowid
+                def_evidence = src.execute('INSERT INTO evidence(release_id,locator) VALUES (1,?)',
+                                           (definition,)).lastrowid
+                src.execute('INSERT INTO sense VALUES (?,?,?,?,?)',
+                            ('fixture-context',rows[0]['entry_id'],3,owner_evidence,
+                             json.dumps(dict(parent_sense_id=rows[0]['sense_id']))))
+                src.execute("""INSERT INTO gloss(sense_id,lang,body,role,position,evidence_id)
+                            VALUES ('fixture-context','en','[Artificial nested context]','definition',1,?)""",
+                            (def_evidence,))
+            apply_decisions(src,[dict(parent_id=rows[0]['sense_id'],snapshot=sha,definition_locator=definition,
+                                      reviewer='fixture',reason='artificial context only',decision='approved',method='human')])
         for locator, in src.execute('SELECT locator FROM evidence').fetchall():
             record_rights(src,sha,locator,source_url='https://example.invalid/lexiflow-fixtures',
                           terms_url='https://example.invalid/lexiflow-fixtures',
@@ -69,7 +89,8 @@ def make(output, version=1):
             for local_id, locator in src.execute(f'SELECT t.id,e.locator FROM {kind} t JOIN evidence e ON e.id=t.evidence_id'):
                 stable = str(uuid5(NAMESPACE_URL,'lexiflow-debug-v1/'+locator))
                 identity.bind(registry,kind,sha,local_id,stable,reason='synthetic fixture')
-        result = export_package(src,registry,output,f'synthetic-debug-v{version}',version=version)
+        suffix = '-context' if context else ''
+        result = export_package(src,registry,output,f'synthetic-debug-v{version}{suffix}',version=version,compact=context)
         shutil.copyfile(Path(__file__).with_name('normalization_vectors.json'), output/'normalization_vectors.json')
         return result
 
@@ -78,5 +99,6 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('output',type=Path)
     parser.add_argument('--schema-version',type=int,choices=(1,2),default=1)
+    parser.add_argument('--sense-context',action='store_true')
     args = parser.parse_args()
-    print(json.dumps(make(args.output,args.schema_version)['counts']))
+    print(json.dumps(make(args.output,args.schema_version,context=args.sense_context)['counts']))

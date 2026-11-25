@@ -244,6 +244,13 @@ public final class MainActivity extends AppCompatActivity {
             details.setText(text);
             rows.addView(details);
             addMetadata(rows,sense.metadata());
+            if (sense.context() != null) {
+                TextView context = new TextView(this);
+                context.setText(getString(R.string.metadata_line,getString(R.string.source_context),
+                        sense.context().text(),sense.context().attribution()));
+                context.setTextIsSelectable(true);
+                rows.addView(context);
+            }
             addAction(rows,getString(R.string.save_sense,sense.position()),() -> model.save(entry,sense));
         }
         TextView credit = new TextView(this);

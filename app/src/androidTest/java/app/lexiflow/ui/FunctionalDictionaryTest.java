@@ -24,6 +24,47 @@ import static org.junit.Assert.*;
 
 @RunWith(AndroidJUnit4.class)
 public class FunctionalDictionaryTest {
+    @Test public void nestedContextKeepsTranslationSenseIdentity() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        org.junit.Assume.assumeTrue(context.getAssets().list("dictionary-context").length > 0);
+        File folder = new File(context.getCacheDir(),"context-" + java.util.UUID.randomUUID());
+        var repository = new LocalDictionaryRepository(new ContextWrapper(context) {
+            @Override public Context getApplicationContext() { return this; }
+            @Override public File getFilesDir() { return folder; }
+        });
+        var personal = Room.inMemoryDatabaseBuilder(context,PersonalDatabase.class).build();
+        try (var flat = context.getAssets().open("dictionary-v2/manifest.json");
+             var before = context.getAssets().open("dictionary-v2/dictionary.sqlite");
+             var nested = context.getAssets().open("dictionary-context/manifest.json");
+             var after = context.getAssets().open("dictionary-context/dictionary.sqlite")) {
+            repository.install(flat,before);
+            var hit = repository.search("демо-объект",true).get(0);
+            assertNull(repository.entry(hit.entryId()).senses().get(0).context());
+            var saved = new PersonalDatabase.Saved();
+            saved.entryId = hit.entryId();
+            saved.senseId = hit.senseId();
+            assertTrue(personal.library().save(saved) > 0);
+            repository.install(nested,after);
+            assertEquals(hit,repository.search("демо-объект",true).get(0));
+            var entry = repository.entry(hit.entryId());
+            assertEquals(2,entry.senses().size());
+            assertEquals(personal.library().saved().get(0).senseId,entry.senses().get(0).id());
+            assertEquals("[Artificial nested context]",entry.senses().get(0).context().text());
+            assertTrue(entry.senses().get(0).context().definitionLocator().endsWith("/sense/0/def/0"));
+            assertNull(entry.senses().get(1).context());
+        } finally {
+            personal.close();
+            repository.close();
+            if (folder.exists()) {
+                try (var files = java.nio.file.Files.walk(folder.toPath())) {
+                    for (var path : files.sorted(java.util.Comparator.reverseOrder()).collect(java.util.stream.Collectors.toList())) {
+                        java.nio.file.Files.delete(path);
+                    }
+                }
+            }
+        }
+    }
+
     @Test public void exportedFixtureSupportsSearchEntryAndFailedReplacement() throws Exception {
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
         File folder = new File(context.getCacheDir(), "dictionary-test-" + java.util.UUID.randomUUID());

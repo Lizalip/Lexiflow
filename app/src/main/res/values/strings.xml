@@ -101,4 +101,5 @@
     <string name="personal_page_range">%1$d–%2$d из %3$d</string>
     <string name="personal_previous_page">Предыдущая страница</string>
     <string name="personal_next_page">Следующая страница</string>
+    <string name="source_context">Контекст источника</string>
 </resources>

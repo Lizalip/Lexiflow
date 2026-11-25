@@ -20,7 +20,8 @@ import java.util.regex.Pattern;
 
 /** Compact links share immutable policies for the lifetime of the open package. */
 record PackageManifest(int format, int schema, String version, String unicode, String digest,
-                       Map<String,Object> counts, Map<String,Attribution> attributions) {
+                       Map<String,Object> counts, Map<String,Attribution> attributions,
+                       Map<String,ContextLink> contexts) {
     static final String NORMALIZATION = "nfc-casefold-nfc-python-whitespace-v1";
     private static final Pattern SHA256 = Pattern.compile("[0-9a-f]{64}");
     private static final Set<String> POLICY_FIELDS = new HashSet<>(Arrays.asList(
@@ -31,6 +32,18 @@ record PackageManifest(int format, int schema, String version, String unicode, S
 
     record Source(String name, String snapshot, String url) {}
     record Policy(Source source, String license, String terms, String credit) {}
+    record ContextLink(String text, Attribution owner, Attribution definition) {
+        boolean belongsTo(Attribution parent) {
+            var source = parent.policy().source();
+            return sameSnapshot(source,owner.policy().source()) && sameSnapshot(source,definition.policy().source())
+                    && owner.locator().matches(Pattern.quote(parent.locator()) + "/sense/(0|[1-9][0-9]*)")
+                    && definition.locator().matches(Pattern.quote(owner.locator()) + "/def/(0|[1-9][0-9]*)");
+        }
+
+        private static boolean sameSnapshot(Source a,Source b) {
+            return a.name().equals(b.name()) && a.snapshot().equals(b.snapshot());
+        }
+    }
     record Attribution(Policy policy, String locator, String modification) {
         String displayCredit() {
             return policy.credit() + " · " + policy.license() + "\n" + policy.source().url();
@@ -50,8 +63,27 @@ record PackageManifest(int format, int schema, String version, String unicode, S
         }
         String digest = requiredText(root.get("database_sha256"));
         if (!SHA256.matcher(digest).matches()) throw new JSONException("invalid database digest");
+        var attributions = decode(root,format);
+        var contexts = new HashMap<String,ContextLink>();
+        if (root.containsKey("sense_context")) {
+            var extension = object(root.get("sense_context"));
+            if (schema != 2 || extension.size() != 2 || integer(extension.get("version")) != 1) {
+                throw new JSONException("invalid sense context extension");
+            }
+            var owners = new HashSet<Attribution>();
+            for (var entry : object(extension.get("senses")).entrySet()) {
+                var row = object(entry.getValue());
+                var owner = attributions.get(requiredText(row.get("owner")));
+                var definition = attributions.get(requiredText(row.get("definition")));
+                if (row.size() != 5 || !"direct-child".equals(row.get("relationship"))
+                        || !"en".equals(row.get("language")) || owner == null || definition == null
+                        || !owners.add(owner)) throw new JSONException("invalid sense context row");
+                contexts.put(entry.getKey(),new ContextLink(requiredText(row.get("text")),owner,definition));
+            }
+            if (contexts.isEmpty()) throw new JSONException("empty sense context extension");
+        }
         return new PackageManifest(format,schema,requiredText(root.get("corpus_version")),
-                requiredText(root.get("unicode_version")),digest,object(root.get("counts")),decode(root,format));
+                requiredText(root.get("unicode_version")),digest,object(root.get("counts")),attributions,contexts);
     }
 
     private static Map<String,Attribution> decode(Map<String,Object> root,int format) throws JSONException {

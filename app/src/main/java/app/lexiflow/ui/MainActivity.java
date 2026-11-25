@@ -96,7 +96,10 @@ public final class MainActivity extends AppCompatActivity {
         model.dictionaryView.observe(this, view -> renderDictionary());
         model.personalView.observe(this, view -> renderPersonal());
         model.personalError.observe(this, error -> {
-            if (Boolean.TRUE.equals(error)) Toast.makeText(this,R.string.personal_error,Toast.LENGTH_SHORT).show();
+            if (Boolean.TRUE.equals(error)) {
+                Toast.makeText(this,R.string.personal_error,Toast.LENGTH_SHORT).show();
+                model.personalError.setValue(false);
+            }
         });
         model.notice.observe(this, message -> {
             if (message == null) return;
@@ -109,7 +112,11 @@ public final class MainActivity extends AppCompatActivity {
 
     private void open(Screen screen) {
         rememberSearchPosition();
-        if (screen != Screen.SETTINGS) restoredPersonalScroll = null;
+        if (screen != Screen.SETTINGS) {
+            restoredPersonalScroll = null;
+        } else if (model.screen() == Screen.VOCABULARY || model.screen() == Screen.COLLECTIONS) {
+            restoredPersonalScroll = findViewById(R.id.scroll).getScrollY();
+        }
         var input = savedQuery.hasFocus() ? savedQuery : query;
         getSystemService(InputMethodManager.class).hideSoftInputFromWindow(input.getWindowToken(), 0);
         query.clearFocus();
@@ -255,8 +262,7 @@ public final class MainActivity extends AppCompatActivity {
             rows.addView(forms);
         }
         for (var sense : entry.senses()) {
-            TextView details = new TextView(this);
-            details.setTextIsSelectable(true);
+            TextView details = inflateArticleDetail(rows);
             StringBuilder text = new StringBuilder(getString(R.string.sense_title, sense.position()));
             if (sense.id().equals(model.selectedSense())) text.append(" · ").append(getString(R.string.selected_sense));
             for (String word : sense.translations()) text.append("\n").append(word);
@@ -270,18 +276,20 @@ public final class MainActivity extends AppCompatActivity {
             rows.addView(details);
             addMetadata(rows,sense.metadata());
             if (sense.context() != null) {
-                TextView context = new TextView(this);
+                TextView context = inflateArticleDetail(rows);
                 context.setText(getString(R.string.metadata_line,getString(R.string.source_context),
                         sense.context().text(),sense.context().attribution()));
-                context.setTextIsSelectable(true);
                 rows.addView(context);
             }
             addAction(rows,getString(R.string.save_sense,sense.position()),() -> model.save(entry,sense));
         }
-        TextView credit = new TextView(this);
+        TextView credit = inflateArticleDetail(rows);
         credit.setText(entry.attribution());
-        credit.setTextIsSelectable(true);
         rows.addView(credit);
+    }
+
+    private TextView inflateArticleDetail(LinearLayout rows) {
+        return (TextView)getLayoutInflater().inflate(R.layout.article_detail,rows,false);
     }
 
     private void addMetadata(LinearLayout rows,java.util.List<DictionaryRepository.Metadata> metadata) {
@@ -298,10 +306,9 @@ public final class MainActivity extends AppCompatActivity {
                 default -> 0;
             };
             if (label == 0) continue;
-            TextView detail = new TextView(this);
+            TextView detail = inflateArticleDetail(rows);
             String text = value.form() == null ? value.value() : value.form() + " · " + value.value();
             detail.setText(getString(R.string.metadata_line,getString(label),text,value.attribution()));
-            detail.setTextIsSelectable(true);
             rows.addView(detail);
         }
     }
@@ -392,19 +399,11 @@ public final class MainActivity extends AppCompatActivity {
     }
 
     private void editSaved(PersonalDatabase.Saved item) {
-        LinearLayout inputs = new LinearLayout(this);
-        inputs.setOrientation(LinearLayout.VERTICAL);
-        int horizontal = getResources().getDimensionPixelSize(R.dimen.space_large);
-        int vertical = getResources().getDimensionPixelSize(R.dimen.space_small);
-        inputs.setPaddingRelative(horizontal,vertical,horizontal,vertical);
-        EditText translation = new EditText(this);
-        translation.setHint(R.string.custom_translation);
+        View inputs = getLayoutInflater().inflate(R.layout.dialog_saved_edit,null);
+        EditText translation = inputs.findViewById(R.id.edit_saved_translation);
         translation.setText(item.custom);
-        EditText note = new EditText(this);
-        note.setHint(R.string.note);
+        EditText note = inputs.findViewById(R.id.edit_saved_note);
         note.setText(item.note);
-        inputs.addView(translation);
-        inputs.addView(note);
         new MaterialAlertDialogBuilder(this).setTitle(item.spelling).setView(inputs)
                 .setNegativeButton(android.R.string.cancel,null).setPositiveButton(R.string.save,(dialog,which) -> {
                     String customText = translation.getText().toString().trim();

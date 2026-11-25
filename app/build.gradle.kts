@@ -54,6 +54,9 @@ android {
         buildTypes.getByName("debug").applicationIdSuffix = ".runtimecheck"
     }
     sourceSets.getByName("debug").assets.srcDir(rootProject.file("research/data/processed/android-debug-assets"))
+    if (isolatedRuntimeCheck && providers.gradleProperty("lexiflow.designPreview").orNull == "true") {
+        sourceSets.getByName("debug").assets.srcDir(rootProject.file("research/data/processed/design-preview"))
+    }
     sourceSets.getByName("androidTest").assets.srcDir(rootProject.file("research/data/processed/android-test-assets"))
     if (isolatedRuntimeCheck && providers.gradleProperty("lexiflow.capacityFixture").orNull == "true") {
         sourceSets.getByName("androidTest").assets.srcDir(rootProject.file(".gradle/benchmark-capacity-assets"))

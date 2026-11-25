@@ -4,12 +4,18 @@ param(
     [string]$Jdk = $env:JAVA_HOME,
     [string]$TestClass,
     [switch]$Capacity,
+    [switch]$DesignPreview,
     [switch]$Evidence,
     [switch]$RequireAll
 )
 
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
+if ($DesignPreview) {
+    $previewClass = 'app.lexiflow.ui.DesignPreviewTest'
+    if ($TestClass -and $TestClass -ne $previewClass) { throw 'Design preview requires its own test class.' }
+    $TestClass = $previewClass
+}
 if (!$Sdk) { $Sdk = Join-Path $env:LOCALAPPDATA 'Android/Sdk' }
 if (!$Jdk) { $Jdk = 'C:/Program Files/Android/Android Studio/jbr' }
 $adb = Join-Path $Sdk 'platform-tools/adb.exe'
@@ -42,6 +48,7 @@ try {
     $tasks = @('--gradle-user-home','.gradle/verification','--offline','--project-cache-dir',
         '.gradle/samsung-isolated','-Plexiflow.isolatedRuntimeCheck=true',':app:assembleDebug',':app:assembleDebugAndroidTest')
     if ($Capacity) { $tasks += '-Plexiflow.capacityFixture=true' }
+    if ($DesignPreview) { $tasks += '-Plexiflow.designPreview=true' }
     & ./gradlew.bat @tasks
     if ($LASTEXITCODE) { throw 'Isolated APK build failed.' }
 

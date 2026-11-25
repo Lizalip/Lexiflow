@@ -35,11 +35,7 @@ public class FoundationViewModelTest {
         model.setQuery("Ё — EN");
         model.open(Screen.ENTRY);
         model.open(Screen.SETTINGS);
-        Map<String, Object> snapshot = new HashMap<>();
-        for (String key : state.keys()) {
-            snapshot.put(key, state.get(key));
-        }
-        FoundationViewModel restored = new FoundationViewModel(new SavedStateHandle(snapshot));
+        FoundationViewModel restored = restore(state);
         assertEquals(Screen.SETTINGS, restored.screen());
         restored.back();
         assertEquals(Screen.ENTRY, restored.screen());
@@ -118,5 +114,34 @@ public class FoundationViewModelTest {
         card.id = 12;
         card.due = 200;
         assertFalse(restored.answerShown(card));
+    }
+
+    @Test public void freshModelRestoresUnfinishedReviewAndPreviousSearchPosition() {
+        SavedStateHandle state = new SavedStateHandle();
+        FoundationViewModel model = new FoundationViewModel(state);
+        model.setQuery("demo");
+        model.setSearchScroll(180);
+        model.open(Screen.REVIEW);
+        model.recordReviewEvent(2);
+        model.recordReviewEvent(0);
+        var card = new app.lexiflow.data.PersonalDatabase.Exercise();
+        card.id = 11;
+        card.due = 150;
+        model.revealAnswer(card);
+        FoundationViewModel restored = restore(state);
+        assertEquals(Screen.REVIEW,restored.screen());
+        assertEquals(2,restored.sessionReviewed());
+        assertEquals(1,restored.sessionSuccessful());
+        assertTrue(restored.answerShown(card));
+        restored.back();
+        assertEquals(Screen.SEARCH,restored.screen());
+        assertEquals("demo",restored.query());
+        assertEquals(180,restored.searchScroll());
+    }
+
+    private static FoundationViewModel restore(SavedStateHandle state) {
+        Map<String,Object> snapshot = new HashMap<>();
+        for (String key : state.keys()) snapshot.put(key,state.get(key));
+        return new FoundationViewModel(new SavedStateHandle(snapshot));
     }
 }

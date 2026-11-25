@@ -136,6 +136,7 @@ public class IsolatedPersonalFlowTest {
             NavigationTest.awaitDictionary(scenario);
             capture(scenario,"09-settings");
             action(R.string.install_debug_v2);
+            scenario.recreate();
             NavigationTest.awaitDictionary(scenario);
             assertFalse("V2 was activated",java.util.Arrays.equals(originalPackage,Files.readAllBytes(pointer)));
         }
@@ -167,6 +168,18 @@ public class IsolatedPersonalFlowTest {
                         }
                     }));
             await(reopened,state -> state.screen() == Screen.VOCABULARY && state.savedCount() == 33,"long saved list");
+            onView(withText(savedLabel)).perform(scrollTo());
+            int[] scrollThroughSettings = new int[1];
+            reopened.onActivity(activity ->
+                    scrollThroughSettings[0] = activity.findViewById(R.id.scroll).getScrollY());
+            assertTrue(scrollThroughSettings[0] > 0);
+            onView(withId(R.id.settings)).perform(click());
+            back();
+            await(reopened,state -> state.screen() == Screen.VOCABULARY && state.savedCount() == 33,"list after settings");
+            onView(withId(R.id.scroll)).check((view,error) -> {
+                if (error != null) throw error;
+                assertEquals(scrollThroughSettings[0],view.getScrollY());
+            });
             onView(withText(savedLabel)).perform(scrollTo(),click());
             int[] scrollBefore = new int[1];
             reopened.onActivity(activity -> scrollBefore[0] = activity.findViewById(R.id.scroll).getScrollY());
@@ -184,7 +197,7 @@ public class IsolatedPersonalFlowTest {
         }
     }
 
-    private static void capture(ActivityScenario<MainActivity> scenario,String name) throws IOException {
+    static void capture(ActivityScenario<MainActivity> scenario,String name) throws IOException {
         if (!"true".equals(InstrumentationRegistry.getArguments().getString("lexiflowEvidence"))) return;
         Bitmap[] frame = new Bitmap[1];
         scenario.onActivity(activity -> {
@@ -215,7 +228,7 @@ public class IsolatedPersonalFlowTest {
         }
     }
 
-    private static void await(ActivityScenario<MainActivity> scenario,
+    static void await(ActivityScenario<MainActivity> scenario,
                               Predicate<FoundationViewModel.PersonalView> condition,String label) throws InterruptedException {
         var ready = new CountDownLatch(1);
         Observer<FoundationViewModel.PersonalView> observer = value -> {

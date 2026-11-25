@@ -1,6 +1,7 @@
 package app.lexiflow.ui;
 
 import androidx.test.core.app.ActivityScenario;
+import androidx.lifecycle.Lifecycle;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.lifecycle.ViewModelProvider;
 import com.google.android.material.appbar.MaterialToolbar;
@@ -68,6 +69,7 @@ public class NavigationTest {
     }
 
     @Test public void launchShowsDictionaryStateAndTabsSwitchSections() throws InterruptedException {
+        long launch = android.os.SystemClock.elapsedRealtime();
         try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
             onView(withId(R.id.title)).check(matches(withText(R.string.dictionary)));
             onView(withId(R.id.navigation)).check(matches(isDisplayed()));
@@ -76,6 +78,8 @@ public class NavigationTest {
             onView(withId(R.id.panel_title)).check(matches(anyOf(
                     withText(R.string.no_corpus),withText(R.string.dictionary_prompt))));
             onView(withId(R.id.query)).check(matches(isDisplayed()));
+            android.util.Log.i("LexiFlowStartup","small fixture visible after launch ms="
+                    + (android.os.SystemClock.elapsedRealtime()-launch));
             onView(withId(R.id.vocabulary)).perform(click());
             onView(withId(R.id.title)).check(matches(withText(R.string.vocabulary)));
             onView(withId(R.id.review)).perform(click());
@@ -185,6 +189,47 @@ public class NavigationTest {
             scenario.recreate();
             onView(withId(R.id.title)).check(matches(withText(R.string.collections)));
             pressBack();
+            onView(withId(R.id.title)).check(matches(withText(R.string.vocabulary)));
+        }
+    }
+
+    @Test public void latestReverseQuerySurvivesBackgroundAndRapidTabChanges() throws InterruptedException {
+        try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
+            awaitDictionary(scenario);
+            boolean[] synthetic = {false};
+            scenario.onActivity(activity -> {
+                var view = new ViewModelProvider(activity).get(FoundationViewModel.class).dictionaryView.getValue();
+                synthetic[0] = view != null && view.synthetic();
+            });
+            org.junit.Assume.assumeTrue("synthetic debug dictionary required",synthetic[0]);
+            onView(withId(R.id.direction)).perform(click());
+            onView(withId(R.id.query)).perform(replaceText("zeta-de"),replaceText("демо-объект"),closeSoftKeyboard());
+            onView(withId(R.id.vocabulary)).perform(click());
+            onView(withId(R.id.review)).perform(click());
+            onView(withId(R.id.search)).perform(click());
+            scenario.moveToState(Lifecycle.State.CREATED);
+            scenario.moveToState(Lifecycle.State.RESUMED);
+            awaitDictionary(scenario);
+            onView(withId(R.id.query)).check(matches(withText("демо-объект")));
+            onView(withText(startsWith("zeta-demo · noun · Значение 1"))).check(matches(isDisplayed()));
+        }
+    }
+
+    @Test public void failedPersonalBackgroundTaskLeavesLaterActionsAvailable() throws InterruptedException {
+        try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
+            onView(withId(R.id.vocabulary)).perform(click());
+            var continued = new CountDownLatch(1);
+            scenario.onActivity(activity -> {
+                var model = new ViewModelProvider(activity).get(FoundationViewModel.class);
+                model.changePersonal(library -> {
+                    throw new android.database.sqlite.SQLiteException("synthetic failed personal operation");
+                });
+                model.changePersonal(library -> continued.countDown());
+            });
+            assertTrue("next personal operation reached the worker",continued.await(5,TimeUnit.SECONDS));
+            onView(withId(R.id.review)).perform(click());
+            onView(withId(R.id.title)).check(matches(withText(R.string.review)));
+            onView(withId(R.id.vocabulary)).perform(click());
             onView(withId(R.id.title)).check(matches(withText(R.string.vocabulary)));
         }
     }

@@ -10,6 +10,19 @@ from release_package import checksum
 
 
 class ReleaseAssetTest(unittest.TestCase):
+    def test_design_preview_is_rich_and_cannot_be_bundled_for_release(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            preview = root/'preview'
+            counts = make(preview,2,context=True,preview=True)['counts']
+            self.assertEqual(counts['entry'],6)
+            self.assertEqual(counts['sense'],8)
+            self.assertEqual(counts['translation'],9)
+            self.assertEqual(counts['example_translation'],2)
+            self.assertEqual(counts['form'],2)
+            with self.assertRaisesRegex(ValueError,'synthetic'):
+                prepare(preview,root/'assets',checksum(preview/'manifest.json'))
+
     def test_interrupted_asset_swap_restores_the_complete_previous_pair(self):
         with TemporaryDirectory() as temp:
             root = Path(temp)

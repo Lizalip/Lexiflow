@@ -11,7 +11,7 @@ from uuid import UUID
 import identity
 from sense_context import apply_decisions, export_context, validate_context
 from prototype import NORMALIZATION_VERSION, integrity
-from review_queue import initialize
+from review_queue import IDENTITY, initialize
 
 FORMAT = 1
 COMPACT_FORMAT = 2
@@ -182,6 +182,61 @@ def readiness(src,registry=None):
                 """, key).fetchone() is not None for key in keys):
                 report['with_identity'] += 1
     return report
+
+
+def preflight(src,selection,registry=None):
+    """Explain blockers for selected source glosses without changing staging."""
+    tables = {name for name, in src.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    rights = provenance(src) if 'rights_decision' in tables else {}
+    seen = set()
+    for requested in selection:
+        if (not isinstance(requested,dict) or set(requested) != set(IDENTITY)
+                or any(not isinstance(value,str) or not value.strip() for value in requested.values())):
+            raise ValueError('selection must contain only exact source keys')
+        key = tuple(requested[field] for field in IDENTITY)
+        if key in seen:
+            raise ValueError('repeated source key')
+        seen.add(key)
+        rows = src.execute("""
+            SELECT e.evidence_id,s.evidence_id,g.evidence_id,g.id
+            FROM sense s JOIN entry e ON s.entry_id=e.id JOIN gloss g ON g.sense_id=s.id
+            JOIN evidence ev ON ev.id=g.evidence_id JOIN release r ON r.id=ev.release_id
+            WHERE e.id=? AND s.id=? AND r.sha256=? AND ev.locator=?
+              AND e.lang='en' AND g.role='source_gloss'
+        """,key).fetchall()
+        if len(rows) != 1:
+            yield dict(requested,blockers=['unknown-or-ambiguous-source-key'])
+            continue
+        entry_evidence,sense_evidence,gloss_evidence,gloss_id = rows[0]
+        blockers = []
+        approval = None
+        if 'semantic_decision' in tables:
+            approval = src.execute("""
+                SELECT t.evidence_id,t.sense_id,t.lang
+                FROM semantic_decision d JOIN translation t ON t.id=d.translation_id
+                WHERE d.gloss_id=? AND d.method='human'
+            """,(gloss_id,)).fetchone()
+        if approval is None:
+            blockers.append('translation-not-approved')
+        elif (approval[1],approval[2]) != (key[1],'ru'):
+            blockers.append('invalid-approved-translation')
+        evidence = [('entry',entry_evidence),('sense',sense_evidence),('source-gloss',gloss_evidence)]
+        if approval is not None:
+            evidence.append(('derived-translation',approval[0]))
+        for kind,eid in evidence:
+            if eid not in rights:
+                status = src.execute('SELECT rights FROM evidence WHERE id=?',(eid,)).fetchone()
+                blockers.append(f'{kind}-rights-' +
+                                ('excluded' if status and status[0] == 'excluded' else 'unverified'))
+        available = [(rights[eid]['source'],rights[eid]['snapshot']) for _,eid in evidence if eid in rights]
+        if len(set(available)) > 1:
+            blockers.append('inconsistent-translation-provenance')
+        for kind,local_id in zip(('entry','sense'),key):
+            if registry is None or registry.execute("""
+                SELECT 1 FROM identity_binding WHERE kind=? AND snapshot=? AND local_id=?
+            """,(kind,key[2],local_id)).fetchone() is None:
+                blockers.append(f'{kind}-identity-unverified')
+        yield dict(requested,blockers=blockers)
 
 
 def copy_eligible(src, dest, registry, version):
@@ -408,18 +463,20 @@ def main():
         ('export', ('staging','registry','package','corpus_version')),
         ('validate', ('package',)),
         ('readiness', ('staging',)),
+        ('preflight', ('staging','selection')),
     ):
         command = commands.add_parser(name)
         if name == 'export':
             command.add_argument('--schema-version',type=int,choices=(1,2),default=1)
             command.add_argument('--compact',action='store_true',help='compact attribution manifest')
-        if name == 'readiness':
+        if name in ('readiness','preflight'):
             command.add_argument('--registry',type=Path)
         for arg in arguments:
             command.add_argument(arg, type=str if arg == 'corpus_version' else Path)
     args = parser.parse_args()
     data = Path(__file__).resolve().parents[2]/'data'
-    for name, root in (('staging','processed'),('registry','processed'),('package','processed'),('decisions','review')):
+    for name, root in (('staging','processed'),('registry','processed'),('package','processed'),
+                       ('decisions','review'),('selection','review')):
         path = getattr(args,name,None)
         if path is not None and not path.resolve().is_relative_to((data/root).resolve()):
             parser.error(f'{name} must be under research/data/{root}/')
@@ -431,6 +488,19 @@ def main():
                 with connect(args.registry,'ro') as registry:
                     report = readiness(src,registry)
         print(json.dumps(report))
+        return
+    if args.command == 'preflight':
+        with args.selection.open(encoding='utf-8-sig') as stream:
+            selection = [json.loads(line) for line in stream]
+        if not selection:
+            parser.error('selection is empty')
+        with connect(args.staging,'ro') as src:
+            if args.registry is None:
+                records = list(preflight(src,selection))
+            else:
+                with connect(args.registry,'ro') as registry:
+                    records = list(preflight(src,selection,registry))
+        print(json.dumps(dict(total=len(records),ready=sum(not row['blockers'] for row in records),records=records)))
         return
     if args.command in ('rights','bind','context'):
         with args.decisions.open(encoding='utf-8') as stream:

@@ -11,7 +11,7 @@ import identity
 from debug_package import make
 from kaikki import import_sample
 from prototype import create_database, normalize, query_plan, release_lookup, research_lookup
-from release_package import STAGING_METADATA, checksum, export_package, readiness, record_rights, validate_package
+from release_package import STAGING_METADATA, checksum, export_package, preflight, readiness, record_rights, validate_package
 from review_queue import IDENTITY, apply, progress, suggest, tasks, validate
 
 
@@ -83,6 +83,24 @@ class ReleaseTests(unittest.TestCase):
             apply(self.staging,[self.approved[0], self.approved[1] | dict(locator='stale')])
         self.assertEqual(progress(self.staging)['approved'],0)
         self.assertEqual(self.staging.execute('SELECT count(*) FROM translation').fetchone()[0],0)
+
+    def test_preflight_reports_all_missing_decisions_without_mutating_staging(self):
+        key = {field:self.rows[0][field] for field in IDENTITY}
+        result, = preflight(self.staging,[key])
+        self.assertEqual(result['blockers'],[
+            'translation-not-approved','entry-rights-unverified','sense-rights-unverified',
+            'source-gloss-rights-unverified','entry-identity-unverified','sense-identity-unverified',
+        ])
+        apply(self.staging,[self.approved[0]])
+        result, = preflight(self.staging,[key],self.registry)
+        self.assertIn('derived-translation-rights-unverified',result['blockers'])
+        self.clear_core()
+        result, = preflight(self.staging,[key],self.registry)
+        self.assertEqual(result['blockers'],[])
+        stale, = preflight(self.staging,[dict(key,locator='stale')],self.registry)
+        self.assertEqual(stale['blockers'],['unknown-or-ambiguous-source-key'])
+        with self.assertRaisesRegex(ValueError,'repeated'):
+            list(preflight(self.staging,[key,key],self.registry))
 
     def test_export_refuses_empty_and_unreviewed_packages(self):
         out = self.path/'refused'

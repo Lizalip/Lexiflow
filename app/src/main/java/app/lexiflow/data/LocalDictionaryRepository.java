@@ -56,42 +56,62 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
         if (database != null || loadAttempted) return;
         loadAttempted = true;
         status = Status.LOADING;
-        File root = new File(context.getFilesDir(), "dictionary");
+        File root = packageRoot();
         try {
-            AtomicFile active = new AtomicFile(new File(root, "active"));
-            String key = null;
+            File activeManifest;
             try {
-                key = readPointer(active);
-            } catch (FileNotFoundException ignored) {
-                // A fresh installation can use the debug asset.
+                activeManifest = openActive(root);
+            } catch (IOException | JSONException | RuntimeException invalidActive) {
+                if (debug() || !installReleaseAsset(null)) throw invalidActive;
+                return;
             }
-            if (key != null) {
-                if (!validId(key)) throw new SQLiteException("invalid active key");
-                File folder = new File(root,key);
-                try (InputStream json = new FileInputStream(new File(folder,"manifest.json"))) {
-                    PackageManifest candidate = readManifest(json);
-                    accept(openValidated(new File(folder,"dictionary.sqlite"), candidate), candidate);
-                }
-            } else if (debug()) {
-                if (!installAsset("dictionary-v2") && !installAsset("dictionary")) {
-                    status = Status.MISSING;
-                }
-            } else {
+            if (!debug()) installReleaseAsset(activeManifest);
+            else if (activeManifest == null && !installAsset("dictionary-v2")) installAsset("dictionary");
+            if (database == null) {
                 status = Status.MISSING;
             }
         } catch (UnsupportedOperationException incompatible) {
-            status = Status.INCOMPATIBLE;
+            if (database == null) status = Status.INCOMPATIBLE;
         } catch (JSONException | SQLiteException | IllegalArgumentException invalid) {
-            status = Status.CORRUPTED;
+            if (database == null) status = Status.CORRUPTED;
         } catch (IOException failure) {
-            status = Status.ERROR;
+            if (database == null) status = Status.ERROR;
         }
+    }
+
+    private File openActive(File root) throws IOException, JSONException {
+        String key;
+        try {
+            key = readPointer(new AtomicFile(new File(root,"active")));
+        } catch (FileNotFoundException absent) {
+            return null;
+        }
+        if (!validId(key)) throw new SQLiteException("invalid active key");
+        File folder = new File(root,key);
+        File manifestFile = new File(folder,"manifest.json");
+        try (InputStream json = new FileInputStream(manifestFile)) {
+            PackageManifest candidate = readManifest(json);
+            accept(openValidated(new File(folder,"dictionary.sqlite"),candidate),candidate);
+        }
+        return manifestFile;
+    }
+
+    private boolean installReleaseAsset(File active) throws IOException, JSONException {
+        String path = "dictionary-release";
+        if (active != null) {
+            try (InputStream bundled = context.getAssets().open(path+"/manifest.json")) {
+                if (sha256(bundled).equals(sha256(active))) return true;
+            } catch (FileNotFoundException absent) {
+                return false;
+            }
+        }
+        return installAsset(path);
     }
 
     private boolean installAsset(String path) throws IOException, JSONException {
         try (InputStream json = context.getAssets().open(path + "/manifest.json");
              InputStream db = context.getAssets().open(path + "/dictionary.sqlite")) {
-            install(json,db);
+            installPackage(json,db);
             return true;
         } catch (FileNotFoundException absent) {
             return false;
@@ -112,9 +132,17 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
         return (context.getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0;
     }
 
+    private File packageRoot() {
+        return new File(context.getFilesDir(),debug() ? "dictionary" : "trusted-dictionary");
+    }
+
     public synchronized void install(InputStream json, InputStream db) throws IOException, JSONException {
         if (!debug()) throw new UnsupportedOperationException("local installation is debug only");
-        File root = new File(context.getFilesDir(), "dictionary");
+        installPackage(json,db);
+    }
+
+    private void installPackage(InputStream json, InputStream db) throws IOException, JSONException {
+        File root = packageRoot();
         File folder = new File(root, UUID.randomUUID().toString());
         Files.createDirectories(folder.toPath());
         File jsonFile = new File(folder, "manifest.json");
@@ -370,11 +398,16 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
 
     private static String sha256(File file) throws IOException {
         try (InputStream input = new FileInputStream(file)) {
+            return sha256(input);
+        }
+    }
+
+    private static String sha256(InputStream input) throws IOException {
+        try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            try (DigestInputStream hashing = new DigestInputStream(input,digest)) {
-                byte[] buffer = new byte[32768];
-                while (hashing.read(buffer) != -1) { /* digest updated by stream */ }
-            }
+            DigestInputStream hashing = new DigestInputStream(input,digest);
+            byte[] buffer = new byte[32768];
+            while (hashing.read(buffer) != -1) { /* digest updated by stream */ }
             StringBuilder hex = new StringBuilder(64);
             for (byte value : digest.digest()) {
                 hex.append(Character.forDigit((value & 0xff) >>> 4,16));

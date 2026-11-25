@@ -1,6 +1,28 @@
 plugins { id("com.android.application") }
 
 val isolatedRuntimeCheck = providers.gradleProperty("lexiflow.isolatedRuntimeCheck").orNull == "true"
+val releaseDictionary = providers.gradleProperty("lexiflow.releaseDictionary").orNull
+val releaseDictionaryHash = providers.gradleProperty("lexiflow.approvedManifestSha256").orNull
+require((releaseDictionary == null) == (releaseDictionaryHash == null)) {
+    "Pass both lexiflow.releaseDictionary and lexiflow.approvedManifestSha256"
+}
+val generatedReleaseAssets = layout.buildDirectory.dir("generated/approved-dictionary")
+if (releaseDictionary != null) {
+    val source = rootProject.file(releaseDictionary)
+    val pipeline = rootProject.file("research/prototypes/sqlite_poc")
+    val prepareDictionary = tasks.register<Exec>("prepareApprovedDictionary") {
+        inputs.files(source.resolve("manifest.json"), source.resolve("dictionary.sqlite"))
+        inputs.files(rootProject.fileTree(pipeline) { include("*.py", "schema.sql") })
+        inputs.property("approvedManifestSha256", releaseDictionaryHash!!)
+        outputs.dir(generatedReleaseAssets)
+        commandLine(providers.gradleProperty("lexiflow.python").getOrElse("python"),
+            pipeline.resolve("prepare_release_asset.py"), source, generatedReleaseAssets.get().asFile,
+            releaseDictionaryHash)
+    }
+    tasks.configureEach {
+        if (name == "mergeReleaseAssets") dependsOn(prepareDictionary)
+    }
+}
 if (isolatedRuntimeCheck) {
     layout.buildDirectory.set(rootProject.layout.projectDirectory.dir(".gradle/runtimecheck-build/app"))
 }
@@ -30,6 +52,9 @@ android {
     }
     sourceSets.getByName("debug").assets.srcDir(rootProject.file("research/data/processed/android-debug-assets"))
     sourceSets.getByName("androidTest").assets.srcDir(rootProject.file("research/data/processed/android-test-assets"))
+    if (releaseDictionary != null) {
+        sourceSets.getByName("release").assets.srcDir(generatedReleaseAssets.get().asFile)
+    }
 }
 dependencies {
     implementation("androidx.activity:activity-ktx:1.13.0")

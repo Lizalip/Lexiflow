@@ -24,6 +24,29 @@ import static org.junit.Assert.*;
 
 @RunWith(AndroidJUnit4.class)
 public class FunctionalDictionaryTest {
+    @Test public void releaseRepositoryDoesNotAcceptExternalDebugStreams() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        File folder = new File(context.getCacheDir(),"release-" + java.util.UUID.randomUUID());
+        var repository = new LocalDictionaryRepository(new ContextWrapper(context) {
+            @Override public Context getApplicationContext() { return this; }
+            @Override public File getFilesDir() { return folder; }
+            @Override public android.content.pm.ApplicationInfo getApplicationInfo() {
+                var info = new android.content.pm.ApplicationInfo(context.getApplicationInfo());
+                info.flags &= ~android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE;
+                return info;
+            }
+        });
+        try (var json = context.getAssets().open("dictionary/manifest.json");
+             var db = context.getAssets().open("dictionary/dictionary.sqlite")) {
+            assertThrows(UnsupportedOperationException.class,() -> repository.install(json,db));
+            repository.load();
+            assertEquals(DictionaryRepository.Status.MISSING,repository.status());
+            assertFalse(folder.exists());
+        } finally {
+            repository.close();
+        }
+    }
+
     @Test public void nestedContextKeepsTranslationSenseIdentity() throws Exception {
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
         org.junit.Assume.assumeTrue(context.getAssets().list("dictionary-context").length > 0);

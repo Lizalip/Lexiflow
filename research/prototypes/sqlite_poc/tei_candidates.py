@@ -143,10 +143,12 @@ def stream_tei(stream):
             break
 
 
-def archive_tei(path):
+def archive_tei(path, direction='eng-rus'):
     """Read the pinned release member in place, without extracting any archive paths."""
     if path.stat().st_size > MAX_ARCHIVE:
         raise ValueError('archive exceeds 30 MiB')
+    if direction not in ('eng-rus','rus-eng'):
+        raise ValueError('unknown FreeDict direction')
 
     class BoundedArchive:
         def __init__(self, stream):
@@ -164,7 +166,7 @@ def archive_tei(path):
             fileobj=BoundedArchive(compressed), mode='r|') as archive:
         found = False
         for member in archive:
-            if member.name != 'eng-rus/eng-rus.tei':
+            if member.name != f'{direction}/{direction}.tei':
                 continue
             if found or not member.isfile() or member.size > MAX_EXPANDED:
                 raise ValueError('unexpected FreeDict TEI archive member')

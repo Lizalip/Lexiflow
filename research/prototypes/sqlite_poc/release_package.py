@@ -326,7 +326,8 @@ def export_package(src, registry, package, corpus_version, *, version=1, compact
                          lambda dest: copy_eligible(src,dest,registry,version))
 
 
-def write_package(src, package, corpus_version, version, compact, populate, policy=None, entry_notes=None):
+def write_package(src, package, corpus_version, version, compact, populate, policy=None, entry_notes=None,
+                  observe=None):
     schema, table_names = package_schema(version)
     package.mkdir()
     database, manifest = package/'dictionary.sqlite', package/'manifest.json'
@@ -360,6 +361,8 @@ def write_package(src, package, corpus_version, version, compact, populate, poli
             else:
                 json.dump(result,stream,ensure_ascii=True,sort_keys=True,indent=2)
             stream.write('\n')
+        if observe is not None:
+            observe(database,manifest,result)
         return validate_package(package)
     except BaseException:
         database.unlink(missing_ok=True)

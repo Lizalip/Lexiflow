@@ -52,6 +52,25 @@ class EnrichmentTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'doctype'):
             list(stream_tei(io.BytesIO(malicious.encode())))
 
+    def test_reverse_tei_keeps_separate_russian_entries_and_locator(self):
+        reverse = BODY.replace("xml:lang='en'","xml:lang='rus'").replace("xml:lang='ru'","xml:lang='eng'")
+        with TemporaryDirectory() as temp, closing(sqlite3.connect(':memory:')) as db:
+            path = Path(temp)/'sample.tar.xz'
+            payload = reverse.encode()
+            with tarfile.open(path,'w:xz') as archive:
+                member = tarfile.TarInfo('rus-eng/rus-eng.tei')
+                member.size = len(payload)
+                archive.addfile(member,io.BytesIO(payload))
+            create_database(db)
+            report = import_freedict(db,path,'rus-eng')
+            self.assertIn('/rus-eng/',report['url'])
+            self.assertEqual(db.execute('SELECT DISTINCT lang FROM entry').fetchall(),[('ru',)])
+            self.assertEqual(db.execute("""SELECT g.lang,e.locator,e.rights FROM gloss g
+                JOIN evidence e ON e.id=g.evidence_id WHERE g.role='source_gloss'""").fetchall(),
+                [('en','entry/1/sense/0/cit/0/quote/0','pending')])
+            self.assertEqual(db.execute("SELECT count(*) FROM gloss WHERE lang='ru' AND role='definition'").fetchone()[0],2)
+            self.assertEqual(db.execute("SELECT count(*) FROM translation").fetchone()[0],0)
+
     def test_freedict_keeps_candidates_pending_and_metadata_scoped(self):
         with TemporaryDirectory() as temp, closing(sqlite3.connect(':memory:')) as db:
             path = Path(temp)/'fixture.tar.xz'

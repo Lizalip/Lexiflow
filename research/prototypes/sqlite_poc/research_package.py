@@ -157,7 +157,7 @@ def populate(src,dest,groups,keys,release_id,entry_notes):
     return attrs,{}
 
 
-def build(src, frequency, package, size):
+def build(src, frequency, package, size, observe=None):
     started = perf_counter()
     release_id = verified_release(src)
     groups,reasons = screen(src.execute(CORE,(release_id,)*3))
@@ -165,7 +165,8 @@ def build(src, frequency, package, size):
     name = f'research-freedict-{VERSION}-{size or "all"}'
     notes = {}
     result = write_package(src,package,name,2,True,
-                           lambda dest: populate(src,dest,groups,keys,release_id,notes),RESEARCH_POLICY,notes)
+                           lambda dest: populate(src,dest,groups,keys,release_id,notes),RESEARCH_POLICY,notes,
+                           observe=observe)
     return dict(spellings=len(keys),eligible_spellings=len(groups),reserved_expressions=expressions,
                 filtered_translation_rows=dict(reasons),counts=result['counts'],
                 entry_definition_notes=sum(map(len,notes.values())),entries_with_definition_notes=len(notes),

@@ -21,6 +21,7 @@ VERSION = '2025.11.23'
 URL = f'https://download.freedict.org/dictionaries/eng-rus/{VERSION}/'
 LICENSE = 'CC-BY-SA-3.0'
 TERMS = 'https://creativecommons.org/licenses/by-sa/3.0/legalcode'
+RUS_ENG_SHA = '9ab8e1a00c463f631e510899d20d26738b11af7b8cdddf8e44a396ba8349bfd5'
 DATA = Path(__file__).resolve().parents[2]/'data'
 STYLE = {'archaic','colloquial','formal','informal','obsolete','offensive','slang','taboo','vulgar'}
 REGION = {'Australia','Canada','Ireland','New-Zealand','Scotland','UK','US','Wales'}
@@ -28,9 +29,12 @@ GRAMMAR = {'comparative','gerund','infinitive','participle','past','plural','pre
            'superlative','third-person'}
 
 
-def import_freedict(db, path):
+def import_freedict(db, path, direction='eng-rus'):
     if path.stat().st_size > MAX_ARCHIVE:
         raise ValueError('archive exceeds 30 MiB')
+    source_lang, target_lang = {'eng-rus':('en','ru'),'rus-eng':('ru','en')}[direction]
+    source_codes = ('en','eng') if source_lang == 'en' else ('ru','rus')
+    target_codes = ('ru','rus') if target_lang == 'ru' else ('en','eng')
     digest = checksum(path)
     header = None
     stats = Counter()
@@ -55,14 +59,14 @@ def import_freedict(db, path):
     with db:
         db.execute('INSERT INTO source VALUES (1,?)',(SOURCE,))
         db.execute('INSERT INTO release VALUES (1,1,?,?)',(digest,VERSION))
-        for kind, record in archive_tei(path):
+        for kind, record in archive_tei(path,direction):
             if kind == 'header':
                 if header is not None or record.get('edition') != VERSION or TERMS not in record['links']:
                     raise ValueError('unexpected FreeDict edition or license declaration')
                 header = record
                 continue
             stats['source_entries'] += 1
-            if header is None or record['language'] != 'en':
+            if header is None or record['language'] not in source_codes:
                 raise ValueError('unexpected FreeDict document structure or entry language')
             headwords = [orth for form in record['forms'] if form['type'] not in ('inflected','inflection')
                          for orth in form['orthographies']]
@@ -72,8 +76,8 @@ def import_freedict(db, path):
             word = headwords[0]['text']
             eid = snapshot_id(SOURCE,digest,record['locator'])
             pos = record['pos'][0]['text'] if len(record['pos']) == 1 else None
-            db.execute('INSERT INTO entry VALUES (?,\'en\',?,?,?,?)',
-                       (eid,word,normalize(word),pos,evidence(record['locator'],record['source_id'])))
+            db.execute('INSERT INTO entry VALUES (?,?,?,?,?,?)',
+                       (eid,source_lang,word,normalize(word),pos,evidence(record['locator'],record['source_id'])))
             for form in record['forms']:
                 for orth in form['orthographies']:
                     if orth is headwords[0]:
@@ -101,11 +105,11 @@ def import_freedict(db, path):
                 db.execute('INSERT INTO sense VALUES (?,?,?,?,?)',
                            (sid,eid,position,evidence(sense['locator'],sense['source_id']),json.dumps(tags)))
                 for i, item in enumerate(sense['definitions'],1):
-                    if item['language'] == 'en':
+                    if item['language'] in source_codes:
                         db.execute("""INSERT INTO gloss(sense_id,lang,body,role,position,evidence_id)
-                                   VALUES (?,'en',?,'definition',?,?)""",
-                                   (sid,item['text'],i,evidence(item['locator'])))
-                        metadata('sense',sid,'definition',item,'en')
+                                   VALUES (?,?,?,'definition',?,?)""",
+                                   (sid,source_lang,item['text'],i,evidence(item['locator'])))
+                        metadata('sense',sid,'definition',item,source_lang)
                 for item in sense['labels']:
                     label = {'reg':'style','style':'style','geo':'region','region':'region'}.get(item['type'])
                     if label:
@@ -115,32 +119,35 @@ def import_freedict(db, path):
                     quotes = citation['quotes']
                     if citation['type'] == 'trans':
                         for item in quotes:
-                            if item['language'] not in ('ru','rus'):
-                                stats['non_russian_or_unlabelled_quotes'] += 1
+                            if item['language'] not in target_codes:
+                                exclusion = ('non_russian_or_unlabelled_quotes' if direction == 'eng-rus'
+                                             else 'non_english_or_unlabelled_quotes')
+                                stats[exclusion] += 1
                                 continue
                             target_position += 1
                             # The existing release gate expects a reviewable origin row.
                             # It remains pending and distinct from an approved translation.
                             db.execute("""INSERT INTO gloss(sense_id,lang,body,role,position,evidence_id)
-                                       VALUES (?,'ru',?,'source_gloss',?,?)""",
-                                       (sid,item['text'],target_position,evidence(item['locator'])))
+                                       VALUES (?,?,?,'source_gloss',?,?)""",
+                                       (sid,target_lang,item['text'],target_position,evidence(item['locator'])))
                     if citation['type'] == 'example':
                         context = '; '.join(item['text'] for item in citation['references']) or None
                         for item in quotes:
-                            if item['language'] not in (None,'en','eng'):
+                            if item['language'] is not None and item['language'] not in source_codes:
                                 continue
                             xid = db.execute("""INSERT INTO example(sense_id,lang,body,citation,evidence_id)
-                                                 VALUES (?,'en',?,?,?)""",
-                                             (sid,item['text'],context,evidence(item['locator']))).lastrowid
+                                                 VALUES (?,?,?,?,?)""",
+                                             (sid,source_lang,item['text'],context,evidence(item['locator']))).lastrowid
                             if len(quotes) == 1:
                                 for nested in citation['nested_quotes']:
-                                    if nested['language'] in ('ru','rus'):
+                                    if nested['language'] in target_codes:
                                         db.execute("""INSERT INTO example_translation(example_id,lang,body,evidence_id)
-                                                       VALUES (?,'ru',?,?)""",
-                                                   (xid,nested['text'],evidence(nested['locator'])))
+                                                       VALUES (?,?,?,?)""",
+                                                   (xid,target_lang,nested['text'],evidence(nested['locator'])))
         if header is None or not stats['source_entries'] or checksum(path) != digest:
             raise ValueError('missing source entries or source changed')
-        manifest = dict(source=SOURCE, edition=VERSION, url=URL, license_id=LICENSE,
+        manifest = dict(source=SOURCE, edition=VERSION, license_id=LICENSE,
+                        url=f'https://download.freedict.org/dictionaries/{direction}/{VERSION}/',
                         terms_url=TERMS, sha256=digest, archive_bytes=path.stat().st_size,
                         header=header, counts=dict(stats))
         db.execute("INSERT INTO metadata VALUES ('freedict_import',?)",(json.dumps(manifest),))
@@ -308,6 +315,7 @@ def main():
     ingest = sub.add_parser('import-freedict')
     ingest.add_argument('archive',type=Path)
     ingest.add_argument('staging',type=Path)
+    ingest.add_argument('--direction',choices=('eng-rus','rus-eng'),default='eng-rus')
     measure = sub.add_parser('coverage')
     measure.add_argument('staging',type=Path)
     pilot = sub.add_parser('pilot')
@@ -326,12 +334,15 @@ def main():
     if not args.staging.resolve().is_relative_to((DATA/'processed').resolve()):
         parser.error('staging must be under research/data/processed/')
     if args.command == 'import-freedict':
+        if args.direction == 'rus-eng' and (args.archive.stat().st_size > 10*1024**2
+                                           or checksum(args.archive) != RUS_ENG_SHA):
+            parser.error('expected verified FreeDict RU–EN 2025.11.23 archive')
         fd = os.open(args.staging,os.O_CREAT | os.O_EXCL | os.O_WRONLY,0o600)
         os.close(fd)
         try:
             with closing(sqlite3.connect(args.staging)) as db:
                 create_database(db)
-                result = import_freedict(db,args.archive)
+                result = import_freedict(db,args.archive,args.direction)
         except BaseException:
             args.staging.unlink(missing_ok=True)
             raise

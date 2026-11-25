@@ -2,20 +2,24 @@ package app.lexiflow.ui;
 
 import android.content.Context;
 import android.content.ContextWrapper;
+import android.os.Debug;
 import android.os.SystemClock;
 import android.util.Log;
 import androidx.lifecycle.ViewModelProvider;
+import androidx.room.Room;
 import androidx.test.core.app.ActivityScenario;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.test.platform.app.InstrumentationRegistry;
 import app.lexiflow.R;
 import app.lexiflow.data.DictionaryRepository;
 import app.lexiflow.data.LocalDictionaryRepository;
+import app.lexiflow.data.PersonalDatabase;
 import java.io.File;
 import java.util.Arrays;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Predicate;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import static app.lexiflow.ui.IsolatedPersonalFlowTest.await;
@@ -140,6 +144,107 @@ public class RealResearchFlowTest {
         }
     }
 
+    @Test public void seedAdditionalUpgradeSaves() {
+        var target = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        assumeTrue("app.lexiflow.researchcheck".equals(target.getPackageName()));
+        var dictionary = new LocalDictionaryRepository(target);
+        var personal = Room.databaseBuilder(target,PersonalDatabase.class,"lexiflow-personal.sqlite").build();
+        try {
+            dictionary.load();
+            assertFalse(dictionary.search("hypothesis",false).stream().anyMatch(hit -> hit.spelling().equals("hypothesis")));
+            var library = personal.library();
+            assertEquals(1,library.savedCount());
+            var collection = library.collections().get(0);
+            for (String spelling : new String[]{"apple","house"}) {
+                var hit = dictionary.search(spelling,false).stream().filter(row -> row.spelling().equals(spelling))
+                        .findFirst().orElseThrow();
+                var saved = new PersonalDatabase.Saved();
+                saved.entryId = hit.entryId();
+                var article = dictionary.entry(hit.entryId());
+                var sense = article.senses().stream().filter(row -> row.id().equals(hit.senseId())).findFirst().orElseThrow();
+                if ("house".equals(spelling)) saved.senseId = hit.senseId();
+                saved.spelling = hit.spelling();
+                saved.answer = saved.senseId.isEmpty() ? String.join(" · ",article.senses().stream()
+                        .flatMap(row -> row.translations().stream()).distinct().collect(java.util.stream.Collectors.toList()))
+                        : String.join(" · ",sense.translations());
+                saved.custom = CUSTOM;
+                saved.note = NOTE;
+                var membership = new PersonalDatabase.Member();
+                membership.savedId = library.save(saved);
+                membership.collectionId = collection.id;
+                assertTrue(library.addMember(membership)>0);
+            }
+        } finally {
+            personal.close();
+            dictionary.close();
+        }
+    }
+
+    @Test public void readsExpandedDictionaryAndPreservesLearning() throws Exception {
+        var target = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        assumeTrue("app.lexiflow.researchcheck".equals(target.getPackageName()));
+        long launch = SystemClock.elapsedRealtime();
+        try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
+            awaitAvailable(scenario);
+            logCapacity(target,launch);
+            query("hypothesis");
+            awaitDictionary(scenario,state -> state.hits().stream().anyMatch(row -> row.spelling().equals("hypothesis")),
+                    "expanded dictionary answers a new query");
+            var dictionary = new LocalDictionaryRepository(target);
+            var personal = Room.databaseBuilder(target,PersonalDatabase.class,"lexiflow-personal.sqlite").build();
+            try {
+                dictionary.load();
+                var library = personal.library();
+                assertEquals(3,library.savedCount());
+                assertEquals(1,library.collections().size());
+                assertEquals(3,library.collectionSize(library.collections().get(0).id));
+                assertEquals(2,library.cardCount());
+                assertEquals(2,library.reviewCount());
+                assertEquals(2,library.successCount());
+                for (var saved : library.saved()) {
+                    var article = dictionary.entry(saved.entryId);
+                    assertNotNull(article);
+                    assertEquals(saved.spelling,article.spelling());
+                    assertEquals(CUSTOM,saved.custom);
+                    assertEquals(NOTE,saved.note);
+                    if (saved.senseId.isEmpty()) {
+                        assertEquals(saved.answer,String.join(" · ",article.senses().stream()
+                                .flatMap(row -> row.translations().stream()).distinct()
+                                .collect(java.util.stream.Collectors.toList())));
+                    } else {
+                        var sense = article.senses().stream().filter(row -> row.id().equals(saved.senseId))
+                                .findFirst().orElseThrow();
+                        assertEquals(saved.answer,String.join(" · ",sense.translations()));
+                    }
+                }
+            } finally {
+                personal.close();
+                dictionary.close();
+            }
+            onView(withId(R.id.vocabulary)).perform(click());
+            await(scenario,state -> state.savedCount()==3,"expanded vocabulary loaded");
+            savedAction(target.getResources().getStringArray(R.array.saved_actions)[0]);
+            awaitDictionary(scenario,state -> state.entry()!=null && state.entry().spelling().equals("book"),
+                    "stored link reopened");
+            capture(scenario,"10-upgraded-entry");
+        }
+        measureRepository(target);
+    }
+
+    private static void logCapacity(Context target,long launch) {
+        var memory = new Debug.MemoryInfo();
+        Debug.getMemoryInfo(memory);
+        Log.i(TAG,"capacity ready ms="+(SystemClock.elapsedRealtime()-launch)
+                +" pss KiB="+memory.getTotalPss()+" installed data bytes="+fileBytes(target.getFilesDir()));
+    }
+
+    private static long fileBytes(File file) {
+        if (file.isFile()) return file.length();
+        var children = file.listFiles();
+        if (children == null) return 0;
+        return Arrays.stream(children).mapToLong(RealResearchFlowTest::fileBytes).sum();
+    }
+
     private static void measureRepository(Context target) {
         var repository = new LocalDictionaryRepository(target);
         try {
@@ -194,16 +299,21 @@ public class RealResearchFlowTest {
     }
 
     private static void awaitAvailable(ActivityScenario<MainActivity> scenario) throws InterruptedException {
+        awaitDictionary(scenario,state -> state.status()!=DictionaryRepository.Status.LOADING,"research dictionary loaded");
+        assertEquals(DictionaryRepository.Status.AVAILABLE,view(scenario).status());
+        assertFalse(view(scenario).synthetic());
+    }
+
+    private static void awaitDictionary(ActivityScenario<MainActivity> scenario,
+            Predicate<FoundationViewModel.DictionaryView> condition,String label) throws InterruptedException {
         var settled = new CountDownLatch(1);
         androidx.lifecycle.Observer<FoundationViewModel.DictionaryView> observer = value -> {
-            if (value!=null && value.status()!=DictionaryRepository.Status.LOADING) settled.countDown();
+            if (value!=null && condition.test(value)) settled.countDown();
         };
         scenario.onActivity(activity -> new ViewModelProvider(activity).get(FoundationViewModel.class)
                 .dictionaryView.observeForever(observer));
         try {
-            assertTrue("research dictionary loaded",settled.await(40,TimeUnit.SECONDS));
-            assertEquals(DictionaryRepository.Status.AVAILABLE,view(scenario).status());
-            assertFalse(view(scenario).synthetic());
+            assertTrue(label,settled.await(40,TimeUnit.SECONDS));
         } finally {
             scenario.onActivity(activity -> new ViewModelProvider(activity).get(FoundationViewModel.class)
                     .dictionaryView.removeObserver(observer));

@@ -1,6 +1,6 @@
 # Локальный исследовательский словарь Stage 1
 
-LexiFlow Research на Samsung SM-X516B (Android 14, API 34) загружает FreeDict EN–RU 2025.11.23 и поддерживает поиск в обе стороны и обучение на найденных значениях. 5 000 уникальных нормализованных английских написаний прошли технический отбор. Статусы человеческой редакторской проверки и допуска к распространению для этого пакета открыты.
+LexiFlow Research на Samsung SM-X516B (Android 14, API 34) загружает FreeDict EN–RU 2025.11.23 и поддерживает поиск в обе стороны и обучение на найденных значениях. Установленная версия обновлена до 20 000 написаний. Пакет 5 000 остаётся вариантом сборки по умолчанию и базой приведённого ниже исторического замера. Обновление, дополнительные размеры и их проверки описаны в ночной контрольной точке. Статусы человеческой редакторской проверки и допуска к распространению открыты. [Ночная контрольная точка](OVERNIGHT_CHECKPOINT.md)
 
 ## Источник и отбор
 
@@ -79,6 +79,8 @@ $pair = "$base/processed/research-app/dictionary-research"
 & $py research/prototypes/sqlite_poc/research_diagnostics.py "$base/processed/enrichment_freedict.sqlite" $pair --kaikki "$base/processed/enrichment_kaikki_metadata.sqlite"
 .\gradlew.bat :app:assembleDebug "-Plexiflow.research=true" "-Plexiflow.python=$py"
 ```
+
+Для сборки установленного на Samsung варианта добавьте `-Plexiflow.researchDictionary=research/data/processed/research-scaling/20000`. Для локального расширенного варианта укажите `research-scaling/30000` с тем же базовым путём. Инструментальный прогон `scripts/verify-research-upgrade.ps1 -Python $py -Measure30000` использует отдельный ID `app.lexiflow.researchcheck`. Ключ `-UpdateResearch` после проверок разрешает обновление пользовательского Research поверх текущей установки.
 
 Если пара уже сформирована, начните с её проверки. Экспорт требует нового каталога и сохраняет существующую пару. Для установки выберите нужное устройство в Studio, затем установите локальный APK из `.gradle/research-build/app/outputs/apk/debug/app-debug.apk`. В списке приложений откройте **LexiFlow Research**. На Samsung проверьте видимость пометки источника, `book`, обратный поиск `книга` и сохранённую карточку после перезапуска. Обычный профиль и личная Room-база изолированы по application ID.
 

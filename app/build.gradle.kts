@@ -2,7 +2,12 @@ plugins { id("com.android.application") }
 
 val isolatedRuntimeCheck = providers.gradleProperty("lexiflow.isolatedRuntimeCheck").orNull == "true"
 val researchProfile = providers.gradleProperty("lexiflow.research").orNull == "true"
+val researchCheck = providers.gradleProperty("lexiflow.researchCheck").orNull == "true"
+val researchDictionary = providers.gradleProperty("lexiflow.researchDictionary").orNull
 require(!researchProfile || !isolatedRuntimeCheck) { "Research and runtimecheck profiles are separate" }
+require(researchProfile || (!researchCheck && researchDictionary == null)) {
+    "Research options require an explicit research profile"
+}
 val releaseDictionary = providers.gradleProperty("lexiflow.releaseDictionary").orNull
 val releaseDictionaryHash = providers.gradleProperty("lexiflow.approvedManifestSha256").orNull
 require((releaseDictionary == null) == (releaseDictionaryHash == null)) {
@@ -31,7 +36,8 @@ if (releaseDictionary != null) {
 if (isolatedRuntimeCheck) {
     layout.buildDirectory.set(rootProject.layout.projectDirectory.dir(".gradle/runtimecheck-build/app"))
 } else if (researchProfile) {
-    layout.buildDirectory.set(rootProject.layout.projectDirectory.dir(".gradle/research-build/app"))
+    val output = if (researchCheck) "researchcheck-build" else "research-build"
+    layout.buildDirectory.set(rootProject.layout.projectDirectory.dir(".gradle/$output/app"))
 }
 
 android {
@@ -59,23 +65,33 @@ android {
     }
     val debug = sourceSets.getByName("debug")
     if (researchProfile) {
-        buildTypes.getByName("debug").applicationIdSuffix = ".research"
+        buildTypes.getByName("debug").applicationIdSuffix = if (researchCheck) ".researchcheck" else ".research"
         debug.res.srcDir("src/researchProfile/res")
-        val researchAssets = rootProject.file("research/data/processed/research-app")
-        val dictionary = researchAssets.resolve("dictionary-research")
         val expectedPair = setOf("manifest.json", "dictionary.sqlite")
-        require(researchAssets.list()?.toSet() == setOf("dictionary-research")
+        val dictionary = rootProject.file(researchDictionary
+            ?: "research/data/processed/research-app/dictionary-research")
+        val processed = rootProject.file("research/data/processed").canonicalFile.toPath()
+        require(dictionary.canonicalFile.toPath().startsWith(processed)
                 && dictionary.list()?.toSet() == expectedPair
                 && expectedPair.all { dictionary.resolve(it).isFile }) {
-            "Generate the exact dictionary-research pair before selecting the research profile"
+            "Select an exact research dictionary pair under research/data/processed"
         }
-        debug.assets.srcDir(researchAssets)
+        val assets = layout.buildDirectory.dir("generated/research-dictionary-assets")
+        debug.assets.srcDir(assets.get().asFile)
         val validator = rootProject.file("research/prototypes/sqlite_poc/research_package.py")
         val verifyResearch = tasks.register<Exec>("verifyResearchDictionary") {
             commandLine(providers.gradleProperty("lexiflow.python").getOrElse("python"), validator, "validate", dictionary)
         }
+        val stageResearch = tasks.register<Sync>("stageResearchDictionary") {
+            dependsOn(verifyResearch)
+            into(assets)
+            from(dictionary) {
+                include(expectedPair)
+                into("dictionary-research")
+            }
+        }
         tasks.configureEach {
-            if (name == "mergeDebugAssets") dependsOn(verifyResearch)
+            if (name == "mergeDebugAssets") dependsOn(stageResearch)
         }
     } else {
         debug.assets.srcDir(rootProject.file("research/data/processed/android-debug-assets"))

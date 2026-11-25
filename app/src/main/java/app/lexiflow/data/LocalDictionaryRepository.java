@@ -62,7 +62,8 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
     public boolean isSynthetic() { return manifest != null && manifest.version().startsWith("synthetic-"); }
 
     public static boolean isResearchProfile(Context context) {
-        return "app.lexiflow.research".equals(context.getPackageName())
+        String packageName = context.getPackageName();
+        return ("app.lexiflow.research".equals(packageName) || "app.lexiflow.researchcheck".equals(packageName))
                 && (context.getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0;
     }
 

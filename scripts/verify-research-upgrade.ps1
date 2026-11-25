@@ -1,0 +1,141 @@
+#Requires -Version 7.0
+param(
+    [Parameter(Mandatory)][string]$Python,
+    [string]$Sdk = "$env:USERPROFILE/AppData/Local/Android/Sdk",
+    [string]$Jdk = 'C:/Program Files/Android/Android Studio/jbr',
+    [switch]$UpdateResearch,
+    [switch]$Measure30000
+)
+
+$ErrorActionPreference = 'Stop'
+$PSNativeCommandUseErrorActionPreference = $true
+$root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$adb = Join-Path $Sdk 'platform-tools/adb.exe'
+$aapt = (Get-ChildItem "$Sdk/build-tools" -Recurse -File -Filter aapt.exe |
+    Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName
+$tempApp = 'app.lexiflow.researchcheck'
+$researchApp = 'app.lexiflow.research'
+$test = 'app.lexiflow.ui.RealResearchFlowTest'
+$env:ANDROID_HOME = $Sdk
+$env:JAVA_HOME = $Jdk
+Push-Location $root
+try {
+    $devices = @(& $adb devices -l | ForEach-Object {
+        if ($_ -match '^(\S+)\s+device\b.*\bmodel:SM_X516B\b') { $Matches[1] }
+    })
+    if ($devices.Count -ne 1) { throw 'Expected exactly one authorized Samsung SM-X516B.' }
+    $serial = $devices[0]
+    if ((& $adb -s $serial shell getprop ro.product.manufacturer).Trim() -ne 'samsung') {
+        throw 'Unexpected manufacturer.'
+    }
+    Write-Host ("Samsung API "+(& $adb -s $serial shell getprop ro.build.version.sdk))
+    $policy = (& $adb -s $serial shell dumpsys window policy |
+        Select-String 'mShowingLockscreen=|mKeyguardShowing=|showing=') -join ' '
+    if ($policy -match '(mShowingLockscreen|mKeyguardShowing|showing)=true') { throw 'Samsung is locked.' }
+    $storage = (& $adb -s $serial shell df -k /data | Select-Object -Last 1).Trim() -split '\s+'
+    if ($storage.Count -lt 6 -or [long]$storage[-3] -lt 1048576) { throw 'Need 1 GiB free on /data.' }
+    Write-Host ("Free KiB on /data: "+$storage[-3])
+
+    function Package-Present($package) {
+        $PSNativeCommandUseErrorActionPreference = $false
+        return [bool]((& $adb -s $serial shell pm path $package) -match '^package:')
+    }
+    foreach ($package in @($tempApp,"$tempApp.test")) {
+        if (Package-Present $package) { throw 'Existing researchcheck installation must be preserved.' }
+    }
+    $runName = 'research-upgrade-'+(Get-Date -Format 'yyyyMMdd-HHmmss-fff')
+    $run = New-Item -ItemType Directory (Join-Path '.gradle/samsung-evidence' $runName)
+    Write-Host "Local report: $($run.FullName)"
+    $artifacts = 'research/data/processed'
+    $old = "$artifacts/research-app/dictionary-research"
+    $new = "$artifacts/research-scaling/20000"
+    & $Python research/prototypes/sqlite_poc/research_upgrade.py $old $new |
+        Tee-Object -FilePath (Join-Path $run.FullName 'identity.json')
+
+    function Build-Apk($dictionary,$label,[switch]$PersonalProfile,[switch]$Tests) {
+        $profile = if ($PersonalProfile) {'research'} else {'researchcheck'}
+        $buildFolder = ".gradle/$profile-build/app/outputs/apk"
+        $arguments = @('--gradle-user-home','.gradle/verification','--offline','--project-cache-dir',
+            ".gradle/overnight-$profile",'-Plexiflow.research=true',"-Plexiflow.python=$Python",
+            "-Plexiflow.researchDictionary=$dictionary",':app:assembleDebug')
+        if (!$PersonalProfile) { $arguments += '-Plexiflow.researchCheck=true' }
+        if ($Tests) { $arguments += ':app:assembleDebugAndroidTest' }
+        & ./gradlew.bat @arguments | Out-Host
+        $file = Join-Path $run.FullName "$label.apk"
+        Copy-Item "$buildFolder/debug/app-debug.apk" $file
+        $expected = if ($PersonalProfile) { $researchApp } else { $tempApp }
+        $identity = (& $aapt dump badging $file | Select-String '^package: name=').Line
+        if ($identity -notlike "package: name='$expected'*") { throw 'Unexpected APK application ID.' }
+        $zip = [IO.Compression.ZipFile]::OpenRead($file)
+        try {
+            $relevant = @($zip.Entries | Where-Object { $_.FullName.StartsWith('assets/dictionary') })
+            if ($relevant.Count -ne 2) { throw 'The APK must contain one dictionary pair.' }
+            foreach ($name in @('manifest.json','dictionary.sqlite')) {
+                $entry = $zip.GetEntry("assets/dictionary-research/$name")
+                if (!$entry) { throw 'Missing staged dictionary file.' }
+                $stream = $entry.Open()
+                try { $hash = (Get-FileHash -InputStream $stream).Hash }
+                finally { $stream.Dispose() }
+                if ($hash -ne (Get-FileHash "$dictionary/$name").Hash) { throw 'APK dictionary hash mismatch.' }
+            }
+        } finally { $zip.Dispose() }
+        if ($Tests) {
+            Copy-Item "$buildFolder/androidTest/debug/app-debug-androidTest.apk" (Join-Path $run.FullName 'test.apk')
+        }
+        Write-Host "$label bytes=$((Get-Item $file).Length)"
+        return $file
+    }
+
+    function Run-Test($method,$label) {
+        & $adb -s $serial shell am force-stop $tempApp
+        $args = @('-s',$serial,'shell','am','instrument','-w','-r','-e','class',"$test#$method",
+            "$tempApp.test/androidx.test.runner.AndroidJUnitRunner")
+        $lines = @(& $adb @args)
+        $lines | Set-Content -Encoding utf8 (Join-Path $run.FullName "$label.txt")
+        if ('INSTRUMENTATION_STATUS_CODE: 0' -notin $lines -or
+            ($lines -join ' ') -notmatch 'OK \(1 test\)') { throw "Research upgrade check failed: $label" }
+        Write-Host "$label passed"
+    }
+
+    $initial = Build-Apk $old '5000-isolated' -Tests
+    $expanded = Build-Apk $new '20000-isolated'
+    $start = [long](& $adb -s $serial shell date '+%s').Trim()
+    & $adb -s $serial install-multi-package -t $initial (Join-Path $run.FullName 'test.apk') |
+        ForEach-Object { $_.Replace($serial,'[tablet]') }
+    try {
+        Run-Test 'usesRealDictionaryAndPersistsPersonalData' '5000-seed'
+        Run-Test 'seedAdditionalUpgradeSaves' '5000-extra-saves'
+        & $adb -s $serial install -r -t $expanded
+        Run-Test 'readsExpandedDictionaryAndPreservesLearning' '20000-verify'
+        Run-Test 'readsExpandedDictionaryAndPreservesLearning' '20000-restart'
+        if ($Measure30000) {
+            $larger = Build-Apk "$artifacts/research-scaling/30000" '30000-isolated'
+            & $adb -s $serial install -r -t $larger
+            Run-Test 'readsExpandedDictionaryAndPreservesLearning' '30000-verify'
+        }
+        $crashes = @(& $adb -s $serial logcat -d -b crash -v epoch | Where-Object {
+            $_ -match '^\s*([0-9]+)\.' -and [long]$Matches[1] -ge $start -and
+            $_ -match 'Process: app\.lexiflow\.researchcheck(?:\.test)?,'
+        })
+        if ($crashes.Count) { throw 'New isolated LexiFlow crash detected.' }
+    } finally {
+        & $adb -s $serial logcat -d -v epoch -s 'LexiFlowResearch:I' '*:S' | Where-Object {
+            $_ -match '^\s*([0-9]+)\.' -and [long]$Matches[1] -ge $start
+        } | Set-Content -Encoding utf8 (Join-Path $run.FullName 'performance.txt')
+        & $adb -s $serial uninstall "$tempApp.test"
+        & $adb -s $serial uninstall $tempApp
+    }
+
+    $apk = Build-Apk $new '20000-research' -PersonalProfile
+    if ($UpdateResearch) {
+        if (!(Package-Present $researchApp)) {
+            throw 'The existing research installation is unavailable for in-place update.'
+        }
+        # Package Manager checks signing compatibility and keeps application data for -r.
+        & $adb -s $serial install -r -t $apk
+        & $adb -s $serial shell am start -W -n "$researchApp/app.lexiflow.ui.MainActivity" |
+            Tee-Object -FilePath (Join-Path $run.FullName 'research-launch.txt')
+    }
+} finally {
+    Pop-Location
+}

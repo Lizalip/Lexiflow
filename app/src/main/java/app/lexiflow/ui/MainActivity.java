@@ -83,11 +83,17 @@ public final class MainActivity extends AppCompatActivity {
         model.personalError.observe(this, error -> {
             if (Boolean.TRUE.equals(error)) Toast.makeText(this,R.string.personal_error,Toast.LENGTH_SHORT).show();
         });
+        model.notice.observe(this, message -> {
+            if (message == null) return;
+            Toast.makeText(this,message,Toast.LENGTH_SHORT).show();
+            model.notice.setValue(null);
+        });
         render();
         model.refresh(false);
     }
 
     private void open(Screen screen) {
+        rememberSearchPosition();
         getSystemService(InputMethodManager.class).hideSoftInputFromWindow(query.getWindowToken(), 0);
         query.clearFocus();
         model.open(screen);
@@ -110,8 +116,7 @@ public final class MainActivity extends AppCompatActivity {
         setTitle(screen.title);
         findViewById(R.id.pair).setVisibility(screen == Screen.SEARCH || screen == Screen.SETTINGS ? View.VISIBLE : View.GONE);
         findViewById(R.id.query_box).setVisibility(screen == Screen.SEARCH ? View.VISIBLE : View.GONE);
-        ((TextView) findViewById(R.id.panel_title)).setText(screen == Screen.SETTINGS && !model.hasDictionary()
-                ? R.string.no_installed_dictionary : screen.heading);
+        ((TextView) findViewById(R.id.panel_title)).setText(screen.heading);
         ((TextView) findViewById(R.id.body)).setText(screen.body);
         MaterialButton action = findViewById(R.id.action);
         action.setVisibility(screen.action == 0 ? View.GONE : View.VISIBLE);
@@ -133,7 +138,19 @@ public final class MainActivity extends AppCompatActivity {
         var state = model.dictionaryView.getValue();
         if (state == null) return;
         if (screen == Screen.SETTINGS) {
-            heading.setText(model.hasDictionary() ? R.string.no_settings : R.string.no_installed_dictionary);
+            rows.removeAllViews();
+            heading.setText(switch (state.status()) {
+                case AVAILABLE -> R.string.dictionary_available;
+                case MISSING -> R.string.no_installed_dictionary;
+                case LOADING -> R.string.dictionary_loading;
+                case ERROR -> R.string.dictionary_error;
+                case CORRUPTED -> R.string.dictionary_corrupted;
+                case INCOMPATIBLE -> R.string.dictionary_incompatible;
+            });
+            if (state.status() != DictionaryRepository.Status.LOADING
+                    && (getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
+                addAction(rows,getString(R.string.install_debug_v2),() -> model.installBundledV2());
+            }
             return;
         }
         if (screen != Screen.SEARCH && screen != Screen.ENTRY) return;
@@ -166,13 +183,22 @@ public final class MainActivity extends AppCompatActivity {
                 for (var hit : state.hits()) {
                     String label = hit.spelling() + (hit.pos() == null ? "" : " · " + hit.pos())
                             + " · " + getString(R.string.sense_title, hit.position());
+                    if (hit.translation() != null) label += "\n" + hit.translation();
+                    if (hit.matchedForm() != null) label += "\n" + getString(R.string.matched_form,hit.matchedForm());
                     addAction(rows, label, () -> {
+                        rememberSearchPosition();
                         getSystemService(InputMethodManager.class).hideSoftInputFromWindow(query.getWindowToken(), 0);
                         query.clearFocus();
                         model.select(hit.entryId(),hit.senseId());
                         render();
                     });
                 }
+                ScrollView scroll = findViewById(R.id.scroll);
+                scroll.post(() -> {
+                    if (model.screen() == Screen.SEARCH && model.dictionaryView.getValue() == state) {
+                        scroll.scrollTo(0, model.searchScroll());
+                    }
+                });
             }
         }
     }
@@ -193,6 +219,7 @@ public final class MainActivity extends AppCompatActivity {
             });
         }
         addAction(rows,getString(R.string.save_entry),() -> model.save(entry,null));
+        addMetadata(rows,entry.metadata());
         for (var sense : entry.senses()) {
             TextView details = new TextView(this);
             details.setTextIsSelectable(true);
@@ -207,6 +234,7 @@ public final class MainActivity extends AppCompatActivity {
             text.append("\n\n").append(sense.attribution()).append("\n");
             details.setText(text);
             rows.addView(details);
+            addMetadata(rows,sense.metadata());
             addAction(rows,getString(R.string.save_sense,sense.position()),() -> model.save(entry,sense));
         }
         TextView credit = new TextView(this);
@@ -215,9 +243,31 @@ public final class MainActivity extends AppCompatActivity {
         rows.addView(credit);
     }
 
+    private void addMetadata(LinearLayout rows,java.util.List<DictionaryRepository.Metadata> metadata) {
+        for (var value : metadata) {
+            int label = switch (value.kind()) {
+                case "ipa" -> R.string.metadata_ipa;
+                case "pronunciation" -> R.string.metadata_pronunciation;
+                case "region" -> R.string.metadata_region;
+                case "style" -> R.string.metadata_style;
+                case "definition" -> R.string.metadata_definition;
+                case "source_gloss" -> R.string.metadata_gloss;
+                case "cefr" -> R.string.metadata_cefr;
+                case "grammar" -> R.string.metadata_grammar;
+                default -> 0;
+            };
+            if (label == 0) continue;
+            TextView detail = new TextView(this);
+            String text = value.form() == null ? value.value() : value.form() + " · " + value.value();
+            detail.setText(getString(R.string.metadata_line,getString(label),text,value.attribution()));
+            detail.setTextIsSelectable(true);
+            rows.addView(detail);
+        }
+    }
+
     private void renderPersonal() {
         Screen screen = model.screen();
-        if (screen == Screen.SEARCH || screen == Screen.ENTRY) return;
+        if (screen == Screen.SEARCH || screen == Screen.ENTRY || screen == Screen.SETTINGS) return;
         LinearLayout rows = findViewById(R.id.results);
         rows.removeAllViews();
         var state = model.personalView.getValue();
@@ -257,7 +307,6 @@ public final class MainActivity extends AppCompatActivity {
                 body.setText(getString(R.string.stats,state.saved().size(),state.collections().size(),state.cards(),
                         state.due(),state.reviewed(),state.successful(),state.reviewed() - state.successful()));
             }
-            case SETTINGS -> heading.setText(model.hasDictionary() ? R.string.no_settings : R.string.no_installed_dictionary);
             default -> { }
         }
     }
@@ -300,7 +349,7 @@ public final class MainActivity extends AppCompatActivity {
                 .setNegativeButton(android.R.string.cancel,null).setPositiveButton(R.string.save,(dialog,which) -> {
                     String customText = translation.getText().toString().trim();
                     String noteText = note.getText().toString().trim();
-                    model.changePersonal(library -> library.edit(item.id,customText,noteText));
+                    model.edit(item.id,customText,noteText);
                 }).show();
     }
 
@@ -396,9 +445,27 @@ public final class MainActivity extends AppCompatActivity {
         rows.addView(button, new LinearLayout.LayoutParams(-1, -2));
     }
 
+    private void rememberSearchPosition() {
+        if (model.screen() == Screen.SEARCH
+                && model.dictionaryView.getValue() != null
+                && model.dictionaryView.getValue().status() == DictionaryRepository.Status.AVAILABLE) {
+            model.setSearchScroll(findViewById(R.id.scroll).getScrollY());
+        }
+    }
+
+    @Override protected void onSaveInstanceState(Bundle outState) {
+        rememberSearchPosition();
+        super.onSaveInstanceState(outState);
+    }
+
     @Override protected void onStop() {
         super.onStop();
         if (pronunciation != null) pronunciation.stop();
+    }
+
+    @Override protected void onResume() {
+        super.onResume();
+        if (model.screen() == Screen.REVIEW || model.screen() == Screen.PROGRESS) model.refreshPersonal();
     }
 
     @Override protected void onDestroy() {

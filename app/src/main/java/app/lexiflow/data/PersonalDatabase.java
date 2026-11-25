@@ -17,7 +17,7 @@ import java.util.List;
 
 @Database(entities = {PersonalDatabase.Saved.class, PersonalDatabase.Collection.class,
         PersonalDatabase.Member.class, PersonalDatabase.Card.class, PersonalDatabase.Event.class},
-        version = 1, exportSchema = false)
+        version = 1, exportSchema = true)
 public abstract class PersonalDatabase extends RoomDatabase {
     public abstract Library library();
 
@@ -83,7 +83,7 @@ public abstract class PersonalDatabase extends RoomDatabase {
         @Query("SELECT * FROM collections ORDER BY name,id") public abstract List<Collection> collections();
         @Query("SELECT * FROM members ORDER BY collectionId,savedId") public abstract List<Member> memberships();
         @Insert(onConflict = OnConflictStrategy.IGNORE) public abstract long save(Saved item);
-        @Query("UPDATE saved SET custom=:custom,note=:note WHERE id=:id") public abstract void edit(long id,String custom,String note);
+        @Query("UPDATE saved SET custom=:custom,note=:note WHERE id=:id") public abstract int edit(long id,String custom,String note);
         @Query("DELETE FROM saved WHERE id=:id") public abstract void remove(long id);
         @Insert(onConflict = OnConflictStrategy.IGNORE) public abstract long create(Collection collection);
         @Query("UPDATE OR IGNORE collections SET name=:name WHERE id=:id") public abstract int rename(long id,String name);

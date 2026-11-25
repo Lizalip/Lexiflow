@@ -11,7 +11,9 @@ import app.lexiflow.data.DictionaryRepository;
 import app.lexiflow.data.LocalDictionaryRepository;
 import app.lexiflow.data.PersonalDatabase;
 import app.lexiflow.data.ReviewScheduler;
+import app.lexiflow.R;
 import java.util.List;
+import java.util.Collections;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.function.Consumer;
@@ -25,13 +27,15 @@ public final class FoundationViewModel extends ViewModel {
     private Handler main;
     private ExecutorService worker;
     private Runnable scheduled;
-    private int request;
+    private volatile int request;
+    private volatile boolean disposed;
     final MutableLiveData<DictionaryView> dictionaryView = new MutableLiveData<>();
     record PersonalView(List<PersonalDatabase.Saved> saved, List<PersonalDatabase.Collection> collections,
                         List<PersonalDatabase.Member> memberships, PersonalDatabase.Exercise exercise,
                         int cards, int due, int reviewed, int successful) {}
     final MutableLiveData<PersonalView> personalView = new MutableLiveData<>();
     final MutableLiveData<Boolean> personalError = new MutableLiveData<>();
+    final MutableLiveData<Integer> notice = new MutableLiveData<>();
     private boolean answerShown;
 
     public FoundationViewModel(SavedStateHandle state) {
@@ -62,16 +66,17 @@ public final class FoundationViewModel extends ViewModel {
             refreshPersonal();
             return;
         }
-        dictionaryView.setValue(new DictionaryView(DictionaryRepository.Status.LOADING, false, List.of(), null));
+        dictionaryView.setValue(new DictionaryView(DictionaryRepository.Status.LOADING, false, Collections.emptyList(), null));
         scheduled = () -> worker.execute(() -> {
+            if (current != request) return;
             DictionaryView result;
             try {
                 dictionary.load();
-                List<DictionaryRepository.Hit> hits = screen == Screen.SEARCH ? dictionary.search(text,reverse) : List.of();
+                List<DictionaryRepository.Hit> hits = screen == Screen.SEARCH ? dictionary.search(text,reverse) : Collections.emptyList();
                 DictionaryRepository.Entry entry = screen == Screen.ENTRY && entryId != null ? dictionary.entry(entryId) : null;
                 result = new DictionaryView(dictionary.status(),dictionary.isSynthetic(),hits,entry);
             } catch (RuntimeException failure) {
-                result = new DictionaryView(DictionaryRepository.Status.ERROR,false,List.of(),null);
+                result = new DictionaryView(DictionaryRepository.Status.ERROR,false,Collections.emptyList(),null);
             }
             DictionaryView completed = result;
             main.post(() -> { if (current == request) dictionaryView.setValue(completed); });
@@ -80,7 +85,9 @@ public final class FoundationViewModel extends ViewModel {
     }
 
     boolean reverse() { return Boolean.TRUE.equals(state.get("reverse")); }
-    void toggleDirection() { state.set("reverse", !reverse()); refresh(false); }
+    void toggleDirection() { state.set("reverse", !reverse()); setSearchScroll(0); refresh(false); }
+    int searchScroll() { Integer scroll = state.get("searchScroll"); return scroll == null ? 0 : scroll; }
+    void setSearchScroll(int scroll) { state.set("searchScroll",scroll); }
     String selectedSense() { return state.get("senseId"); }
     void select(String entryId, String senseId) {
         state.set("entryId",entryId);
@@ -100,12 +107,13 @@ public final class FoundationViewModel extends ViewModel {
                 var snapshot = new PersonalView(library.saved(),library.collections(),library.memberships(),
                         library.next(now),library.cardCount(),library.dueCount(now),library.reviewCount(),library.successCount());
                 main.post(() -> {
+                    if (disposed) return;
                     answerShown = false;
                     personalError.setValue(false);
                     personalView.setValue(snapshot);
                 });
             } catch (RuntimeException failure) {
-                main.post(() -> personalError.setValue(true));
+                main.post(() -> { if (!disposed) personalError.setValue(true); });
             }
         });
     }
@@ -118,7 +126,37 @@ public final class FoundationViewModel extends ViewModel {
         item.answer = sense == null ? String.join(" · ",entry.senses().stream()
                 .flatMap(value -> value.translations().stream()).distinct().collect(java.util.stream.Collectors.toList()))
                 : String.join(" · ",sense.translations());
-        changePersonal(library -> library.save(item));
+        changePersonal(library -> notifyResult(library.save(item) == -1 ? R.string.already_saved : R.string.saved_notice));
+    }
+
+    void edit(long id,String translation,String note) {
+        changePersonal(library -> {
+            notifyResult(library.edit(id,translation,note) == 1 ? R.string.edited_notice : R.string.personal_error);
+        });
+    }
+
+    void installBundledV2() {
+        ++request;
+        if (scheduled != null) main.removeCallbacks(scheduled);
+        dictionaryView.setValue(new DictionaryView(DictionaryRepository.Status.LOADING,false,Collections.emptyList(),null));
+        worker.execute(() -> {
+            try {
+                dictionary.installBundledV2();
+                main.post(() -> {
+                    if (!disposed) {
+                        notice.setValue(R.string.dictionary_updated);
+                        refresh(false);
+                    }
+                });
+            } catch (Exception failure) {
+                notifyResult(R.string.dictionary_update_rejected);
+                main.post(() -> { if (!disposed) refresh(false); });
+            }
+        });
+    }
+
+    private void notifyResult(int message) {
+        main.post(() -> { if (!disposed) notice.setValue(message); });
     }
 
     long collection() {
@@ -134,6 +172,7 @@ public final class FoundationViewModel extends ViewModel {
 
     @Override protected void onCleared() {
         if (worker != null) {
+            disposed = true;
             ++request;
             if (scheduled != null) main.removeCallbacks(scheduled);
             worker.execute(() -> { dictionary.close(); personal.close(); });
@@ -188,6 +227,8 @@ public final class FoundationViewModel extends ViewModel {
     }
 
     void setQuery(String query) {
+        if (query.equals(query())) return;
+        setSearchScroll(0);
         state.set("query", query);
         refresh(true);
     }

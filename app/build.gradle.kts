@@ -10,6 +10,11 @@ android {
         versionCode = 1
         versionName = "0.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        javaCompileOptions {
+            annotationProcessorOptions {
+                argument("room.schemaLocation", project.file("schemas").path)
+            }
+        }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

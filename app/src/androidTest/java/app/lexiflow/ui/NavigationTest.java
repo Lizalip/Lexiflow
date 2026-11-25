@@ -17,6 +17,7 @@ import static androidx.test.espresso.action.ViewActions.scrollTo;
 import static androidx.test.espresso.assertion.ViewAssertions.matches;
 import static androidx.test.espresso.matcher.ViewMatchers.*;
 import static org.hamcrest.Matchers.anyOf;
+import static org.hamcrest.Matchers.startsWith;
 import static org.junit.Assert.assertTrue;
 
 @RunWith(AndroidJUnit4.class)
@@ -57,7 +58,7 @@ public class NavigationTest {
             onView(withId(R.id.query)).perform(click(), replaceText("outdated search"), replaceText(draft), closeSoftKeyboard());
             awaitDictionary(scenario);
             if (available[0]) {
-                onView(withText("zeta demo phrase · phrase · Значение 1")).perform(scrollTo(),click());
+                onView(withText(startsWith("zeta demo phrase · phrase · Значение 1"))).perform(scrollTo(),click());
             } else {
                 onView(withId(R.id.action)).perform(scrollTo(), click());
             }
@@ -69,15 +70,16 @@ public class NavigationTest {
         }
     }
 
-    @Test public void settingsReturnsToProgressThenBackToReview() {
+    @Test public void settingsReturnsToProgressThenBackToReview() throws InterruptedException {
         try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
             onView(withId(R.id.review)).perform(click());
             onView(withId(R.id.action)).perform(scrollTo(), click());
             onView(withId(R.id.title)).check(matches(withText(R.string.progress)));
             onView(withId(R.id.settings)).perform(click());
             onView(withId(R.id.title)).check(matches(withText(R.string.settings)));
+            awaitDictionary(scenario);
             onView(withId(R.id.panel_title)).check(matches(anyOf(
-                    withText(R.string.no_installed_dictionary),withText(R.string.no_settings))));
+                    withText(R.string.no_installed_dictionary),withText(R.string.dictionary_available))));
             pressBack();
             onView(withId(R.id.title)).check(matches(withText(R.string.progress)));
             pressBack();

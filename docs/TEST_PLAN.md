@@ -7,12 +7,15 @@
 ```powershell
 New-Item -ItemType Directory -Force research/data/processed/android-debug-assets
 python research/prototypes/sqlite_poc/debug_package.py research/data/processed/android-debug-assets/dictionary
+python research/prototypes/sqlite_poc/debug_package.py research/data/processed/android-debug-assets/dictionary-v2 --schema-version 2
 python -m unittest discover -s research/prototypes/sqlite_poc -v
 .\gradlew.bat assembleDebug lintDebug assembleDebugAndroidTest assembleRelease
 .\gradlew.bat --gradle-user-home .gradle/verification testDebugUnitTest
 ```
 
 Затем откройте корень проекта в Android Studio, выполните Gradle Sync, выберите variant `debug` и запустите `app` на API 29+. Для `connectedDebugAndroidTest` используйте отдельную чистую тестовую установку и подготовленный debug-пакет. В release ожидается пустое состояние отсутствующего корпуса. Пакет debug получается из искусственных технических данных с отдельными постоянными UUID.
+
+На Windows для проверки минимального API откройте **Tools → Device Manager → Create Virtual Device**, выберите телефон и образ **Android 10 / API 29, Google APIs x86_64**. Если образ отсутствует, установите его через Device Manager или SDK Manager. Запустите AVD, проверьте, что `adb devices -l` показывает `device`, и выполните `.\gradlew.bat connectedDebugAndroidTest`. Можно использовать подключённый Android 10 с USB-отладкой. Наличие платформы компиляции SDK 37 само по себе не даёт образа Android 10.
 
 ## Ручная приёмка
 
@@ -21,6 +24,8 @@ python -m unittest discover -s research/prototypes/sqlite_poc -v
 - [ ] Дважды сохраните одно значение. В личном словаре проверьте одну запись, добавьте свой перевод и заметку. Создайте и переименуйте подборку, добавьте запись и уберите её из подборки.
 - [ ] Создайте карточки обоих направлений. Раскройте ответ, оцените его и проверьте фактические счётчики. Перезапустите приложение и проверьте личные данные и историю.
 - [ ] На устройстве API 29 проверьте клавиатуру, поворот, крупный шрифт и TalkBack. Отдельно прогоните тесты ICU и SQLite.
+- [ ] В тестовом профиле с V1 сохраните значение, заметку и карточку. В настройках установите встроенный V2. Проверьте статус, сохранность личной базы и появление IPA, определения, глоссы и атрибуции в статье. В соседнем смысле без метаданных поле должно отсутствовать.
+- [ ] Быстро смените запрос и направление, затем перейдите в настройки во время загрузки. Вернитесь в поиск и проверьте последнюю выдачу и позицию прокрутки.
 
 ## Что покрывают тесты
 

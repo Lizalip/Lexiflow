@@ -15,4 +15,11 @@ public class ReviewSchedulerTest {
         assertEquals(365,ReviewScheduler.basic(365,2,0).days());
         assertThrows(IllegalArgumentException.class,() -> ReviewScheduler.basic(0,3,0));
     }
+
+    @Test public void schedulingUsesSuppliedClockAndRejectsOverflow() {
+        assertEquals(600_000L,ReviewScheduler.basic(0,0,0).due());
+        assertEquals(599_000L,ReviewScheduler.basic(0,0,-1000).due());
+        assertThrows(IllegalArgumentException.class,() -> ReviewScheduler.basic(-1,1,0));
+        assertThrows(ArithmeticException.class,() -> ReviewScheduler.basic(0,1,Long.MAX_VALUE));
+    }
 }

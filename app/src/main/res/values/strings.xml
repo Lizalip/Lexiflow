@@ -81,4 +81,21 @@
         <item>Трудно</item>
         <item>Знаю</item>
     </string-array>
+    <string name="dictionary_available">Словарь установлен</string>
+    <string name="install_debug_v2">Установить тестовый пакет V2</string>
+    <string name="dictionary_updated">Тестовый пакет V2 подключён</string>
+    <string name="dictionary_update_rejected">Тестовый пакет V2 не установлен</string>
+    <string name="matched_form">Форма: %1$s</string>
+    <string name="already_saved">Эта запись уже сохранена</string>
+    <string name="saved_notice">Запись сохранена</string>
+    <string name="edited_notice">Перевод и заметка сохранены</string>
+    <string name="metadata_ipa">МФА</string>
+    <string name="metadata_pronunciation">Вариант произношения</string>
+    <string name="metadata_region">Регион</string>
+    <string name="metadata_style">Регистр</string>
+    <string name="metadata_definition">Определение</string>
+    <string name="metadata_gloss">Исходная глосса</string>
+    <string name="metadata_cefr">CEFR</string>
+    <string name="metadata_grammar">Грамматика</string>
+    <string name="metadata_line">%1$s · %2$s\n%3$s</string>
 </resources>

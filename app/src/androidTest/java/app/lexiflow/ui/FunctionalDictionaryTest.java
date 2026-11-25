@@ -13,6 +13,7 @@ import app.lexiflow.data.ReviewScheduler;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.io.File;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -35,23 +36,36 @@ public class FunctionalDictionaryTest {
             assertEquals(3,repository.search("ZETA-DEMO",false).size());
             assertEquals(4,repository.search("zeta",false).size());
             assertEquals(2,repository.search("zeta-demos",false).size());
+            assertEquals("zeta-demos",repository.search("zeta-demos",false).get(0).matchedForm());
             var reverse = repository.search("ДЕМО-ОБЪЕКТ",true);
             assertEquals(1,reverse.size());
+            assertEquals("демо-объект",reverse.get(0).translation());
             var article = repository.entry(reverse.get(0).entryId());
             assertEquals("noun",article.pos());
             assertEquals(2,article.senses().size());
             assertEquals(1,article.senses().get(0).examples().size());
             assertTrue(article.senses().get(1).examples().isEmpty());
             assertTrue(article.attribution().contains("synthetic"));
+            assertTrue(article.metadata().isEmpty());
             try (InputStream invalid = context.getAssets().open("dictionary/manifest.json")) {
                 assertThrows(SQLiteException.class,() -> repository.install(invalid,new ByteArrayInputStream(new byte[]{1})));
             }
+            try (InputStream metadata = context.getAssets().open("dictionary/manifest.json")) {
+                assertThrows(IOException.class,() -> repository.install(metadata,new InputStream() {
+                    @Override public int read() throws IOException { throw new IOException("artificial interruption"); }
+                }));
+            }
             assertThrows(UnsupportedOperationException.class,() -> repository.install(
-                    new ByteArrayInputStream("{\"package_format\":2,\"schema_version\":2,\"language_pairs\":[]}"
+                    new ByteArrayInputStream("{\"package_format\":2,\"schema_version\":3,\"language_pairs\":[]}"
                             .getBytes(StandardCharsets.UTF_8)),new ByteArrayInputStream(new byte[0])));
             repository.close();
             repository.load();
             assertEquals(1,repository.search("демо-объект",true).size());
+            repository.installBundledV2();
+            var enriched = repository.entry(article.id());
+            assertEquals(4,enriched.metadata().size());
+            assertEquals(4,enriched.senses().get(0).metadata().size());
+            assertTrue(enriched.senses().get(1).metadata().isEmpty());
         } finally {
             repository.close();
             if (folder.exists()) {
@@ -80,10 +94,11 @@ public class FunctionalDictionaryTest {
                 savedId = library.save(item);
                 assertTrue(savedId > 0);
                 assertEquals(-1,library.save(item));
-                library.edit(savedId,"custom","note");
+                assertEquals(1,library.edit(savedId,"custom","note"));
                 var collection = new PersonalDatabase.Collection();
                 collection.name = "fixtures";
                 long collectionId = library.create(collection);
+                assertEquals(-1,library.create(collection));
                 assertEquals(1,library.rename(collectionId,"renamed"));
                 var member = new PersonalDatabase.Member();
                 member.collectionId = collectionId;
@@ -114,7 +129,14 @@ public class FunctionalDictionaryTest {
                 assertEquals("renamed",library.collections().get(0).name);
                 assertEquals(1,library.reviewCount());
                 assertEquals(1,library.successCount());
+                var entireEntry = new PersonalDatabase.Saved();
+                entireEntry.entryId = "missing-in-corpus";
+                entireEntry.spelling = "artificial";
+                entireEntry.answer = "fixture";
+                assertTrue(library.save(entireEntry) > 0);
                 library.remove(savedId);
+                assertEquals(0,library.edit(savedId,"unavailable",""));
+                assertEquals(1,library.saved().size());
                 assertEquals(0,library.cardCount());
                 assertEquals(1,library.reviewCount());
             } finally { reopened.close(); }

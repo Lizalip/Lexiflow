@@ -308,12 +308,25 @@ def package_schema(version):
     return (DISTRIBUTION,TABLES) if version == 1 else (DISTRIBUTION_V2,(*TABLES,'lexical_metadata'))
 
 
+def read_manifest(path):
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError('duplicate manifest identifier')
+            result[key] = value
+        return result
+
+    with path.open(encoding='utf-8') as stream:
+        return json.load(stream,object_pairs_hook=unique_object)
+
+
 def validate_package(package):
     database = package/'dictionary.sqlite'
     manifest = package/'manifest.json'
     if manifest.stat().st_size > MAX_MANIFEST or database.stat().st_size > MAX_DATABASE:
         raise ValueError('dictionary package exceeds size limit')
-    data = json.loads(manifest.read_text(encoding='utf-8'))
+    data = read_manifest(manifest)
     if not isinstance(data,dict):
         raise ValueError('manifest must be an object')
     version = data.get('schema_version')

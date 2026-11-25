@@ -10,10 +10,12 @@ import org.json.JSONException;
 import java.io.File;
 import java.io.ByteArrayOutputStream;
 import java.io.FileInputStream;
+import java.io.FilterInputStream;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -100,7 +102,7 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
         if (!debug()) throw new IOException("bundled V2 unavailable");
         try (InputStream json = context.getAssets().open("dictionary-v2/manifest.json")) {
             PackageManifest bundled = readManifest(json);
-            if (database != null && bundled.schema() == manifest.schema()
+            if (database != null && bundled.format() == manifest.format() && bundled.schema() == manifest.schema()
                     && bundled.version().equals(manifest.version()) && bundled.digest().equals(manifest.digest())) return;
         }
         if (!installAsset("dictionary-v2")) throw new IOException("bundled V2 unavailable");
@@ -205,8 +207,17 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
             for (String sql : probes) {
                 try (Cursor probe = opened.rawQuery(sql,null)) { probe.getColumnNames(); }
             }
-            try (Cursor refs = opened.rawQuery("SELECT DISTINCT origin_attribution_id FROM translation",null)) {
-                while (refs.moveToNext()) candidate.attributions().getJSONObject(refs.getString(0));
+            try (Cursor refs = opened.rawQuery("SELECT t.origin_attribution_id,t.attribution_id,s.attribution_id,e.attribution_id"
+                    + " FROM translation t JOIN sense s ON s.id=t.sense_id JOIN entry e ON e.id=s.entry_id",null)) {
+                while (refs.moveToNext()) {
+                    var origin = candidate.attribution(refs.getString(0)).policy().source();
+                    for (int i = 1; i < 4; i++) {
+                        var source = candidate.attribution(refs.getString(i)).policy().source();
+                        if (!origin.name().equals(source.name()) || !origin.snapshot().equals(source.snapshot())) {
+                            throw new JSONException("inconsistent translation provenance");
+                        }
+                    }
+                }
             }
             for (String sql : new String[]{"SELECT spelling,search_key FROM entry",
                     "SELECT spelling,search_key FROM form","SELECT wording,search_key FROM translation"}) {
@@ -218,7 +229,7 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
                     }
                 }
             }
-            if (candidate.counts().getLong("entry") == 0 || candidate.counts().getLong("translation") == 0
+            if (candidate.count("entry") == 0 || candidate.count("translation") == 0
                     || !"0".equals(scalar(opened,"SELECT count(*) FROM sense s WHERE NOT EXISTS "
                     + "(SELECT 1 FROM translation t WHERE t.sense_id=s.id)"))
                     || !"0".equals(scalar(opened,"SELECT count(*) FROM entry e WHERE NOT EXISTS "
@@ -236,16 +247,11 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
     }
 
     private static void checkTable(SQLiteDatabase db,PackageManifest candidate,String table) throws JSONException {
-        if (Long.parseLong(scalar(db,"SELECT count(*) FROM " + table)) != candidate.counts().getLong(table)) {
+        if (Long.parseLong(scalar(db,"SELECT count(*) FROM " + table)) != candidate.count(table)) {
             throw new SQLiteException("manifest count mismatch");
         }
         try (Cursor refs = db.rawQuery("SELECT DISTINCT attribution_id FROM " + table,null)) {
-            while (refs.moveToNext()) {
-                var attribution = candidate.attributions().getJSONObject(refs.getString(0));
-                for (String field : new String[]{"source_url","license_id","terms_url","attribution","modification","source","snapshot","locator"}) {
-                    if (attribution.getString(field).trim().isEmpty()) throw new JSONException("empty attribution field");
-                }
-            }
+            while (refs.moveToNext()) candidate.attribution(refs.getString(0));
         }
     }
 
@@ -301,10 +307,26 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
     }
 
     private static PackageManifest readManifest(InputStream input) throws IOException, JSONException {
-        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-        transfer(input,bytes,MAX_MANIFEST);
-        String json = StandardCharsets.UTF_8.newDecoder().decode(java.nio.ByteBuffer.wrap(bytes.toByteArray())).toString();
-        return PackageManifest.parse(json);
+        InputStream bounded = new FilterInputStream(input) {
+            private long remaining = MAX_MANIFEST;
+
+            @Override public int read(byte[] bytes,int offset,int length) throws IOException {
+                int count = in.read(bytes,offset,(int) Math.min(length,remaining+1));
+                if (count > 0 && (remaining -= count) < 0) throw new IOException("package input exceeds size limit");
+                return count;
+            }
+
+            @Override public int read() throws IOException {
+                int value = in.read();
+                if (value != -1 && --remaining < 0) throw new IOException("package input exceeds size limit");
+                return value;
+            }
+        };
+        try {
+            return PackageManifest.parse(new InputStreamReader(bounded,StandardCharsets.UTF_8.newDecoder()));
+        } catch (android.util.MalformedJsonException | java.io.EOFException malformed) {
+            throw new JSONException("malformed package manifest");
+        }
     }
 
     private static String readPointer(AtomicFile active) throws IOException {
@@ -399,9 +421,11 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
     }
 
     private String attribution(String ref) {
-        var object = manifest.attributions().optJSONObject(ref);
-        if (object == null) throw new SQLiteException("missing attribution");
-        return object.optString("attribution") + " · " + object.optString("license_id") + "\n" + object.optString("source_url");
+        try {
+            return manifest.attribution(ref).displayCredit();
+        } catch (JSONException invalid) {
+            throw new SQLiteException("missing attribution");
+        }
     }
 
     @Override public synchronized Entry entry(String id) {

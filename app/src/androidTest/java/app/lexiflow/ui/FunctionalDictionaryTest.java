@@ -15,6 +15,9 @@ import java.io.InputStream;
 import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import static org.junit.Assert.*;
@@ -66,6 +69,39 @@ public class FunctionalDictionaryTest {
             assertEquals(4,enriched.metadata().size());
             assertEquals(4,enriched.senses().get(0).metadata().size());
             assertTrue(enriched.senses().get(1).metadata().isEmpty());
+            try (InputStream metadata = context.getAssets().open("dictionary-v2/manifest.json")) {
+                var compact = compactFixture(new JSONObject(new java.util.Scanner(metadata, "UTF-8")
+                        .useDelimiter("\\A").next()));
+                installFixture(repository,context,compact.toString());
+                assertEquals(enriched,repository.entry(article.id()));
+                var pointer = new File(folder,"dictionary/active").toPath();
+                byte[] activePackage = java.nio.file.Files.readAllBytes(pointer);
+                var links = compact.getJSONObject("attributions");
+                String ref = links.keys().next();
+                var link = links.getJSONArray(ref);
+                String valid = compact.toString();
+                String duplicate = valid.replace("\""+ref+"\":","\""+ref+"\":"+link+",\""+ref+"\":");
+                assertThrows(JSONException.class,() -> installFixture(repository,context,duplicate));
+                link.put(0,compact.getJSONArray("policies").length());
+                assertThrows(JSONException.class,() -> installFixture(repository,context,compact.toString()));
+                link.put(0,true);
+                assertThrows(JSONException.class,() -> installFixture(repository,context,compact.toString()));
+                link.put(0,0);
+                var policies = compact.getJSONArray("policies");
+                compact.remove("policies");
+                assertThrows(JSONException.class,() -> installFixture(repository,context,compact.toString()));
+                compact.put("policies",policies);
+                policies.getJSONObject(0).put("license_id","changed license");
+                assertThrows(JSONException.class,() -> installFixture(repository,context,compact.toString()));
+                try (InputStream corrupt = new ByteArrayInputStream(new byte[]{1})) {
+                    assertThrows(SQLiteException.class,() -> repository.install(jsonStream(valid),corrupt));
+                }
+                assertEquals(enriched,repository.entry(article.id()));
+                assertArrayEquals(activePackage,java.nio.file.Files.readAllBytes(pointer));
+                repository.close();
+                repository.load();
+                assertEquals(enriched,repository.entry(article.id()));
+            }
         } finally {
             repository.close();
             if (folder.exists()) {
@@ -76,6 +112,34 @@ public class FunctionalDictionaryTest {
                 }
             }
         }
+    }
+
+    private static ByteArrayInputStream jsonStream(String json) {
+        return new ByteArrayInputStream(json.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private static void installFixture(LocalDictionaryRepository repository,Context context,String json) throws Exception {
+        try (InputStream db = context.getAssets().open("dictionary-v2/dictionary.sqlite")) {
+            repository.install(jsonStream(json),db);
+        }
+    }
+
+    private static JSONObject compactFixture(JSONObject flat) throws JSONException {
+        var links = new JSONObject();
+        JSONObject policy = null;
+        JSONObject original = flat.getJSONObject("attributions");
+        for (var refs = original.keys(); refs.hasNext();) {
+            String id = refs.next();
+            JSONObject entry = original.getJSONObject(id);
+            String locator = (String) entry.remove("locator");
+            String modification = (String) entry.remove("modification");
+            if (policy == null) policy = entry;
+            else assertEquals(policy.toString(),entry.toString());
+            links.put(id,new JSONArray().put(0).put(locator).put(modification));
+        }
+        // All synthetic rows have the same policy. Keep a shared reference to it.
+        return flat.put("package_format",2).put("attributions",links)
+                .put("policies",new JSONArray().put(policy));
     }
 
     @Test public void personalLibraryPersistsAndPreservesReviewHistory() {

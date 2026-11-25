@@ -127,6 +127,19 @@ class EnrichmentTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'invalid compact attribution link'):
                 validate_package(root/'compact')
 
+    def test_duplicate_manifest_reference_is_rejected_before_json_can_overwrite_it(self):
+        with TemporaryDirectory() as temp:
+            path = Path(temp)/'compact'
+            data = make(path,2,compact=True)
+            ref, link = next(iter(data['attributions'].items()))
+            identifier = json.dumps(ref)
+            value = json.dumps(link,separators=(',',':'))
+            manifest = path/'manifest.json'
+            manifest.write_text(manifest.read_text(encoding='utf-8').replace(
+                f'{identifier}:{value}',f'{identifier}:{value},{identifier}:{value}',1),encoding='utf-8')
+            with self.assertRaisesRegex(ValueError,'duplicate manifest identifier'):
+                validate_package(path)
+
     def test_wikdict_leaves_missing_sense_links_unaligned_and_disables_writes(self):
         with closing(sqlite3.connect(':memory:')) as db:
             db.executescript("""

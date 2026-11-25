@@ -9,7 +9,18 @@
 
     <ScrollView android:id="@+id/scroll" android:layout_width="match_parent"
         android:layout_height="0dp" android:layout_weight="1" android:fillViewport="true">
-        <include layout="@layout/screen_content" />
+        <androidx.constraintlayout.widget.ConstraintLayout
+            android:layout_width="match_parent" android:layout_height="wrap_content">
+            <include
+                android:id="@+id/screen_content"
+                layout="@layout/screen_content"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                app:layout_constraintStart_toStartOf="parent"
+                app:layout_constraintEnd_toEndOf="parent"
+                app:layout_constraintTop_toTopOf="parent"
+                app:layout_constraintWidth_max="@dimen/content_max_width" />
+        </androidx.constraintlayout.widget.ConstraintLayout>
     </ScrollView>
 
     <com.google.android.material.bottomnavigation.BottomNavigationView

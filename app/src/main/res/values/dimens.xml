@@ -5,4 +5,6 @@
     <dimen name="space_large">24dp</dimen>
     <dimen name="panel_corner_radius">20dp</dimen>
     <dimen name="action_touch_target">48dp</dimen>
+    <dimen name="content_max_width">720dp</dimen>
+    <dimen name="content_horizontal_padding">@dimen/space_large</dimen>
 </resources>

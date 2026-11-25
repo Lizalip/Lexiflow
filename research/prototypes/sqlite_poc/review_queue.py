@@ -53,6 +53,35 @@ def initialize(conn):
     conn.executescript(HISTORY)
 
 
+def definition_evidence(conn, task):
+    """Return context with its actual owner and separate rights, within one snapshot."""
+    def definitions(owner, relationship):
+        return [
+            dict(sense_id=owner, relationship=relationship, text=body, lang=lang, locator=locator,
+                 snapshot_sha256=task['snapshot_sha256'], rights=rights)
+            for body,lang,locator,rights in conn.execute("""
+                SELECT g.body,g.lang,ev.locator,ev.rights
+                FROM gloss g JOIN evidence ev ON ev.id=g.evidence_id
+                JOIN release r ON r.id=ev.release_id
+                WHERE g.sense_id=? AND g.role='definition' AND r.sha256=?
+                ORDER BY g.position,g.id
+            """,(owner,task['snapshot_sha256']))
+        ]
+    sense = task['sense_id']
+    owned = definitions(sense,'same-sense')
+    if owned:
+        return owned
+    children = conn.execute("""
+        SELECT s.id FROM sense s JOIN evidence ev ON ev.id=s.evidence_id
+        JOIN release r ON r.id=ev.release_id
+        WHERE s.entry_id=? AND r.sha256=?
+        AND CASE WHEN json_type(s.raw_tags)='object'
+            THEN json_extract(s.raw_tags,'$.parent_sense_id') END=?
+        ORDER BY s.position LIMIT 2
+    """,(task['entry_id'],task['snapshot_sha256'],sense)).fetchall()
+    return definitions(children[0][0],'direct-child') if len(children) == 1 else []
+
+
 def tasks(conn):
     for row in conn.execute(GLOSS_ROWS + ' ORDER BY g.id'):
         task = dict(row)
@@ -63,18 +92,9 @@ def tasks(conn):
             SELECT x.body, xt.body FROM example x LEFT JOIN example_translation xt
             ON xt.example_id=x.id WHERE x.sense_id=? ORDER BY x.id,xt.id LIMIT 3
         """, (task['sense_id'],))]
-        task['definition_context'] = []
-        if task['source'] == STRUCTURED_SOURCE:
-            definitions = conn.execute("""SELECT body FROM gloss WHERE sense_id=? AND role='definition'
-                                        ORDER BY position""",(task['sense_id'],)).fetchall()
-            if not definitions:
-                children = conn.execute("""SELECT id FROM sense WHERE entry_id=?
-                    AND json_extract(raw_tags,'$.parent_sense_id')=? ORDER BY position""",
-                    (task['entry_id'],task['sense_id'])).fetchall()
-                if len(children) == 1:
-                    definitions = conn.execute("""SELECT body FROM gloss
-                        WHERE sense_id=? AND role='definition' ORDER BY position""",(children[0][0],)).fetchall()
-            task['definition_context'] = [row[0] for row in definitions]
+        context = definition_evidence(conn,task) if task['source'] == STRUCTURED_SOURCE else []
+        task['definition_context'] = [item['text'] for item in context]
+        task['definition_evidence'] = context
         task.update(status='pending', classification=None, proposed_translation=None,
                     decision=None, reviewer=None, method=None, reason=None)
         yield task

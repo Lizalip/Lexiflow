@@ -15,7 +15,7 @@ from enrichment_benchmark import flat_manifest_sizes
 from kaikki import import_sample
 from prototype import create_database
 from release_package import expand_attributions, validate_package
-from review_queue import EDITOR_FIELDS, FIELDS, apply, triage_rows
+from review_queue import EDITOR_FIELDS, FIELDS, apply, definition_evidence, triage_rows
 from scale_fixture import make
 from tei_candidates import stream_tei
 from wikdict_candidates import candidates
@@ -72,10 +72,22 @@ class EnrichmentTests(unittest.TestCase):
             db.row_factory = sqlite3.Row
             row, = triage_rows(db,'standard')
             self.assertEqual(row['definition_context'],['artificial definition'])
+            evidence, = row['definition_evidence']
+            self.assertEqual(evidence['relationship'],'direct-child')
+            self.assertNotEqual(evidence['sense_id'],row['sense_id'])
+            self.assertEqual(evidence['locator'],'entry/1/sense/0/sense/0/def/0')
+            self.assertEqual(evidence['rights'],'pending')
+            self.assertEqual(evidence['snapshot_sha256'],row['snapshot_sha256'])
             self.assertEqual(row['rights'],'pending')
             with self.assertRaisesRegex(ValueError,'proposal cannot be applied'):
                 apply(db,[{key:row[key] for key in FIELDS | EDITOR_FIELDS}])
             self.assertEqual(db.execute('SELECT count(*) FROM translation').fetchone()[0],0)
+            other = db.execute("SELECT id,raw_tags FROM sense WHERE raw_tags LIKE '%sense_id%null%' AND entry_id=? AND id<>?",
+                               (row['entry_id'],row['sense_id'])).fetchone()
+            tags = json.loads(other['raw_tags'])
+            tags['parent_sense_id'] = row['sense_id']
+            db.execute('UPDATE sense SET raw_tags=? WHERE id=?',(json.dumps(tags),other['id']))
+            self.assertEqual(definition_evidence(db,row),[])
 
     def test_frequency_counts_rank_spellings_and_retain_other_parts_of_speech(self):
         with TemporaryDirectory() as temp, closing(sqlite3.connect(':memory:')) as db:

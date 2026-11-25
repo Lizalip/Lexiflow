@@ -145,7 +145,7 @@ public class NavigationTest {
         }
     }
 
-    private static void awaitDictionary(ActivityScenario<MainActivity> scenario) throws InterruptedException {
+    static void awaitDictionary(ActivityScenario<MainActivity> scenario) throws InterruptedException {
         CountDownLatch ready = new CountDownLatch(1);
         androidx.lifecycle.Observer<FoundationViewModel.DictionaryView> observer = state -> {
             if (state != null && state.status() != DictionaryRepository.Status.LOADING) ready.countDown();

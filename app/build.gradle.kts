@@ -1,5 +1,10 @@
 plugins { id("com.android.application") }
 
+val isolatedRuntimeCheck = providers.gradleProperty("lexiflow.isolatedRuntimeCheck").orNull == "true"
+if (isolatedRuntimeCheck) {
+    layout.buildDirectory.set(rootProject.layout.projectDirectory.dir(".gradle/runtimecheck-build/app"))
+}
+
 android {
     namespace = "app.lexiflow"
     compileSdk { version = release(37) }
@@ -19,6 +24,9 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+    }
+    if (isolatedRuntimeCheck) {
+        buildTypes.getByName("debug").applicationIdSuffix = ".runtimecheck"
     }
     sourceSets.getByName("debug").assets.srcDir(rootProject.file("research/data/processed/android-debug-assets"))
     sourceSets.getByName("androidTest").assets.srcDir(rootProject.file("research/data/processed/android-test-assets"))

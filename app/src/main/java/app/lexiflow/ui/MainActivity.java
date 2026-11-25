@@ -19,6 +19,7 @@ import androidx.core.view.WindowInsetsCompat;
 import androidx.lifecycle.ViewModelProvider;
 import app.lexiflow.R;
 import app.lexiflow.data.DictionaryRepository;
+import app.lexiflow.data.LocalDictionaryRepository;
 import app.lexiflow.data.PersonalDatabase;
 import com.google.android.material.appbar.MaterialToolbar;
 import com.google.android.material.bottomnavigation.BottomNavigationView;
@@ -45,6 +46,9 @@ public final class MainActivity extends AppCompatActivity {
         super.onCreate(savedState);
         WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
         setContentView(R.layout.activity_main);
+        if (LocalDictionaryRepository.isResearchProfile(this)) {
+            findViewById(R.id.research_banner).setVisibility(View.VISIBLE);
+        }
         View root = findViewById(R.id.root);
         ViewCompat.setOnApplyWindowInsetsListener(root, (view, insets) -> {
             Insets safe = insets.getInsets(WindowInsetsCompat.Type.systemBars()
@@ -178,6 +182,7 @@ public final class MainActivity extends AppCompatActivity {
                 case INCOMPATIBLE -> R.string.dictionary_incompatible;
             });
             if (state.status() != DictionaryRepository.Status.LOADING
+                    && !LocalDictionaryRepository.isResearchProfile(this)
                     && (getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
                 addAction(rows,getString(R.string.install_debug_v2),() -> model.installBundledV2());
             }
@@ -253,7 +258,8 @@ public final class MainActivity extends AppCompatActivity {
             });
         }
         addAction(rows,getString(R.string.save_entry),() -> model.save(entry,null));
-        addMetadata(rows,entry.metadata());
+        boolean research = LocalDictionaryRepository.isResearchProfile(this);
+        if (!research) addMetadata(rows,entry.metadata(),false);
         if (!entry.forms().isEmpty()) {
             TextView forms = (TextView)getLayoutInflater().inflate(R.layout.entry_forms,rows,false);
             var text = new StringBuilder(getString(R.string.word_forms));
@@ -274,7 +280,7 @@ public final class MainActivity extends AppCompatActivity {
             text.append("\n\n").append(sense.attribution()).append("\n");
             details.setText(text);
             rows.addView(details);
-            addMetadata(rows,sense.metadata());
+            addMetadata(rows,sense.metadata(),false);
             if (sense.context() != null) {
                 TextView context = inflateArticleDetail(rows);
                 context.setText(getString(R.string.metadata_line,getString(R.string.source_context),
@@ -283,6 +289,7 @@ public final class MainActivity extends AppCompatActivity {
             }
             addAction(rows,getString(R.string.save_sense,sense.position()),() -> model.save(entry,sense));
         }
+        if (research) addMetadata(rows,entry.metadata(),true);
         TextView credit = inflateArticleDetail(rows);
         credit.setText(entry.attribution());
         rows.addView(credit);
@@ -292,14 +299,15 @@ public final class MainActivity extends AppCompatActivity {
         return (TextView)getLayoutInflater().inflate(R.layout.article_detail,rows,false);
     }
 
-    private void addMetadata(LinearLayout rows,java.util.List<DictionaryRepository.Metadata> metadata) {
+    private void addMetadata(LinearLayout rows,java.util.List<DictionaryRepository.Metadata> metadata,
+                             boolean sourceEntryNotes) {
         for (var value : metadata) {
             int label = switch (value.kind()) {
                 case "ipa" -> R.string.metadata_ipa;
                 case "pronunciation" -> R.string.metadata_pronunciation;
                 case "region" -> R.string.metadata_region;
                 case "style" -> R.string.metadata_style;
-                case "definition" -> R.string.metadata_definition;
+                case "definition" -> sourceEntryNotes ? R.string.research_definition_note : R.string.metadata_definition;
                 case "source_gloss" -> R.string.metadata_gloss;
                 case "cefr" -> R.string.metadata_cefr;
                 case "grammar" -> R.string.metadata_grammar;

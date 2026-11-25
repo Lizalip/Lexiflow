@@ -61,6 +61,11 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
     @Override public Set<String> installedLanguages() { return status == Status.AVAILABLE ? LANGUAGES : Collections.emptySet(); }
     public boolean isSynthetic() { return manifest != null && manifest.version().startsWith("synthetic-"); }
 
+    public static boolean isResearchProfile(Context context) {
+        return "app.lexiflow.research".equals(context.getPackageName())
+                && (context.getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0;
+    }
+
     public synchronized void load() {
         long started = System.nanoTime();
         synchronized (DictionaryPackageStore.LOCK) {
@@ -78,15 +83,16 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
         loadAttempted = true;
         status = Status.LOADING;
         File root = packageRoot();
+        String bundled = isResearchProfile(context) ? "dictionary-research" : debug() ? null : "dictionary-release";
         try {
             File activeManifest;
             try {
                 activeManifest = openActive(root);
             } catch (IOException | JSONException | RuntimeException invalidActive) {
-                if (debug() || !installReleaseAsset(null)) throw invalidActive;
+                if (bundled == null || !installBundledPackage(bundled,null)) throw invalidActive;
                 return;
             }
-            if (!debug()) installReleaseAsset(activeManifest);
+            if (bundled != null) installBundledPackage(bundled,activeManifest);
             else if (activeManifest == null && !installAsset("dictionary-v2")) installAsset("dictionary");
             if (database == null) {
                 status = Status.MISSING;
@@ -153,8 +159,7 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
         return manifestFile;
     }
 
-    private boolean installReleaseAsset(File active) throws IOException, JSONException {
-        String path = "dictionary-release";
+    private boolean installBundledPackage(String path,File active) throws IOException, JSONException {
         if (active != null) {
             try (InputStream bundled = context.getAssets().open(path+"/manifest.json")) {
                 if (sha256(bundled).equals(openManifestDigest)) return true;
@@ -176,7 +181,7 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
     }
 
     public synchronized void installBundledV2() throws IOException, JSONException {
-        if (!debug()) throw new IOException("bundled V2 unavailable");
+        if (!debug() || isResearchProfile(context)) throw new IOException("bundled V2 unavailable");
         synchronized (DictionaryPackageStore.LOCK) {
             try (InputStream json = context.getAssets().open("dictionary-v2/manifest.json")) {
                 if (sha256(json).equals(openManifestDigest)) return;
@@ -249,7 +254,7 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
     }
 
     private String validation(String manifestDigest,String databaseDigest) {
-        return "2\n" + (debug() ? "debug" : "apk") + "\n"
+        return "2\n" + (isResearchProfile(context) ? "research" : debug() ? "debug" : "apk") + "\n"
                 + android.os.Build.VERSION.SDK_INT + "\n" + android.os.Build.VERSION.INCREMENTAL + "\n"
                 + android.icu.lang.UCharacter.getUnicodeVersion() + "\n" + manifestDigest + "\n" + databaseDigest;
     }
@@ -257,6 +262,9 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
     private SQLiteDatabase openValidated(File file, ParsedManifest parsed, String databaseDigest, boolean verified)
             throws IOException, JSONException {
         PackageManifest candidate = parsed.manifest();
+        if (candidate.research() != isResearchProfile(context)) {
+            throw new UnsupportedOperationException("research package and application profile must match");
+        }
         if (candidate.version().startsWith("synthetic-") && !debug()) {
             throw new UnsupportedOperationException("synthetic packages require a debug installation");
         }
@@ -279,6 +287,15 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
                 try (Cursor row = opened.rawQuery("SELECT attribution_id FROM sense WHERE id=?",new String[]{entry.getKey()})) {
                     if (!row.moveToFirst() || !entry.getValue().belongsTo(candidate.attribution(row.getString(0)))) {
                         throw new JSONException("invalid source sense relationship");
+                    }
+                }
+            }
+            for (var entry : candidate.entryNotes().entrySet()) {
+                try (Cursor row = opened.rawQuery("SELECT attribution_id FROM entry WHERE id=?",new String[]{entry.getKey()})) {
+                    if (!row.moveToFirst()) throw new JSONException("missing source entry note owner");
+                    var origin = candidate.attribution(row.getString(0));
+                    for (var note : entry.getValue()) {
+                        if (!note.belongsTo(origin)) throw new JSONException("source entry note provenance mismatch");
                     }
                 }
             }
@@ -608,8 +625,15 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
             try (Cursor rows = database.rawQuery("SELECT spelling,attribution_id FROM form WHERE entry_id=? ORDER BY id",new String[]{id})) {
                 while (rows.moveToNext()) forms.add(new Form(rows.getString(0),attribution(rows.getString(1))));
             }
+            List<Metadata> entryMetadata = metadata(id,false);
+            var notes = manifest.entryNotes().get(id);
+            if (notes != null) {
+                for (var note : notes) {
+                    entryMetadata.add(new Metadata("definition",note.text(),"en",null,note.definition().displayCredit()));
+                }
+            }
             return new Entry(id,entry.getString(0),entry.getString(1),senses,attribution(entry.getString(2)),
-                    metadata(id,false),new ArrayList<>(forms));
+                    entryMetadata,new ArrayList<>(forms));
         }
     }
 

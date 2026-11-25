@@ -20,10 +20,11 @@ import java.util.function.BiConsumer;
 import java.util.regex.Pattern;
 
 /** Compact links share immutable policies for the lifetime of the open package. */
-record PackageManifest(int format, int schema, String version, String unicode, String digest,
+record PackageManifest(int format, int schema, String version, String unicode, String digest, boolean research,
                        Map<String,Object> counts, Map<String,Attribution> attributions,
-                       Map<String,ContextLink> contexts) {
+                       Map<String,ContextLink> contexts,Map<String,List<EntryNote>> entryNotes) {
     static final String NORMALIZATION = "nfc-casefold-nfc-python-whitespace-v1";
+    private static final String RESEARCH_POLICY = "research-local-v1";
     private static final Pattern SHA256 = Pattern.compile("[0-9a-f]{64}");
     private static final Set<String> POLICY_FIELDS = new HashSet<>(Arrays.asList(
             "source","snapshot","source_url","license_id","terms_url","attribution"));
@@ -57,6 +58,13 @@ record PackageManifest(int format, int schema, String version, String unicode, S
             return policy.credit() + " · " + policy.license() + "\n" + policy.source().url();
         }
     }
+    record EntryNote(String text,Attribution definition) {
+        boolean belongsTo(Attribution entry) {
+            return ContextLink.sameSnapshot(entry.policy().source(),definition.policy().source())
+                    && definition.locator().matches(Pattern.quote(entry.locator())
+                    + "/sense/(0|[1-9][0-9]*)/sense/(0|[1-9][0-9]*)/def/(0|[1-9][0-9]*)");
+        }
+    }
 
     static PackageManifest parse(Reader input) throws IOException, JSONException {
         return parse(input,null,true);
@@ -78,8 +86,14 @@ record PackageManifest(int format, int schema, String version, String unicode, S
         }
         String digest = requiredText(root.get("database_sha256"));
         if (!SHA256.matcher(digest).matches()) throw new JSONException("invalid database digest");
+        String version = requiredText(root.get("corpus_version"));
+        boolean research = version.toLowerCase(java.util.Locale.ROOT).startsWith("research-");
+        if (research ? format != 2 || schema != 2 || !RESEARCH_POLICY.equals(root.get("distribution_policy"))
+                : root.containsKey("distribution_policy") || root.containsKey("source_entry_notes")) {
+            throw new JSONException("inconsistent research package markers");
+        }
         started = System.nanoTime();
-        var attributions = decode(root,format,verifyAttributionIds);
+        var attributions = decode(root,format,verifyAttributionIds,research);
         if (timing != null) timing.accept("attribution_decode_and_verify",System.nanoTime()-started);
         var contexts = new HashMap<String,ContextLink>();
         if (root.containsKey("sense_context")) {
@@ -99,11 +113,39 @@ record PackageManifest(int format, int schema, String version, String unicode, S
             }
             if (contexts.isEmpty()) throw new JSONException("empty sense context extension");
         }
-        return new PackageManifest(format,schema,requiredText(root.get("corpus_version")),
-                requiredText(root.get("unicode_version")),digest,object(root.get("counts")),attributions,contexts);
+        return new PackageManifest(format,schema,version,requiredText(root.get("unicode_version")),digest,research,
+                object(root.get("counts")),attributions,contexts,decodeEntryNotes(root,attributions));
     }
 
-    private static Map<String,Attribution> decode(Map<String,Object> root,int format,boolean verifyAttributionIds)
+    private static Map<String,List<EntryNote>> decodeEntryNotes(Map<String,Object> root,
+                         Map<String,Attribution> attributions) throws JSONException {
+        Map<String,List<EntryNote>> result = new HashMap<>();
+        if (!root.containsKey("source_entry_notes")) return result;
+        var extension = object(root.get("source_entry_notes"));
+        if (extension.size() != 2 || integer(extension.get("version")) != 1) {
+            throw new JSONException("invalid source entry notes version");
+        }
+        for (var entry : object(extension.get("entries")).entrySet()) {
+            var notes = array(entry.getValue());
+            if (notes.isEmpty() || notes.size() > 3) throw new JSONException("invalid source entry note count");
+            List<EntryNote> decoded = new ArrayList<>();
+            Set<String> seen = new HashSet<>();
+            for (Object item : notes) {
+                var row = object(item);
+                String text = requiredText(row.get("text"));
+                String reference = requiredText(row.get("definition"));
+                Attribution definition = attributions.get(reference);
+                if (row.size() != 2 || text.codePointCount(0,text.length()) > 1000 || definition == null
+                        || !seen.add(reference)) throw new JSONException("invalid source entry note");
+                decoded.add(new EntryNote(text,definition));
+            }
+            result.put(entry.getKey(),decoded);
+        }
+        if (result.isEmpty()) throw new JSONException("empty source entry note extension");
+        return result;
+    }
+
+    private static Map<String,Attribution> decode(Map<String,Object> root,int format,boolean verifyAttributionIds,boolean research)
             throws JSONException {
         List<Policy> policies = new ArrayList<>();
         List<CanonicalPolicy> encodedPolicies = new ArrayList<>();
@@ -145,6 +187,9 @@ record PackageManifest(int format, int schema, String version, String unicode, S
                 if (!row.keySet().equals(ATTRIBUTION_FIELDS)) throw new JSONException("invalid attribution fields");
                 attribution = new Attribution(policy(row),requiredText(row.get("locator")),
                         requiredText(row.get("modification")));
+            }
+            if (attribution.modification().startsWith(RESEARCH_POLICY+":") != research) {
+                throw new JSONException("inconsistent research attribution");
             }
             if (verifyAttributionIds && !matchesId(hash,entry.getKey(),attribution,encoded,canonical)) {
                 throw new JSONException("attribution identifier mismatch");

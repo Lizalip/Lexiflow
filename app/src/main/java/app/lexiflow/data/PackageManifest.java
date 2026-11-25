@@ -29,9 +29,16 @@ record PackageManifest(int format, int schema, String version, String unicode, S
     private static final Set<String> ATTRIBUTION_FIELDS = new HashSet<>(Arrays.asList(
             "source","snapshot","source_url","license_id","terms_url","attribution","locator","modification"));
     private static final char[] HEX = "0123456789abcdef".toCharArray();
+    private static final int CACHED_CANONICAL_POLICIES = 128;
 
     record Source(String name, String snapshot, String url) {}
     record Policy(Source source, String license, String terms, String credit) {}
+    private record CanonicalPolicy(byte[] prefix, byte[] suffix) {
+        CanonicalPolicy(Policy policy) {
+            this(ascii(appendPolicyPrefix(new StringBuilder(),policy)),
+                 ascii(appendPolicySuffix(new StringBuilder(),policy)));
+        }
+    }
     record ContextLink(String text, Attribution owner, Attribution definition) {
         boolean belongsTo(Attribution parent) {
             var source = parent.policy().source();
@@ -88,6 +95,7 @@ record PackageManifest(int format, int schema, String version, String unicode, S
 
     private static Map<String,Attribution> decode(Map<String,Object> root,int format) throws JSONException {
         List<Policy> policies = new ArrayList<>();
+        List<CanonicalPolicy> encodedPolicies = new ArrayList<>();
         if (format == 2) {
             Set<Policy> distinct = new HashSet<>();
             for (Object raw : array(root.get("policies"))) {
@@ -96,17 +104,23 @@ record PackageManifest(int format, int schema, String version, String unicode, S
                 Policy policy = policy(fields);
                 if (!distinct.add(policy)) throw new JSONException("duplicate attribution policy");
                 policies.add(policy);
+                if (encodedPolicies.size() < CACHED_CANONICAL_POLICIES) {
+                    encodedPolicies.add(new CanonicalPolicy(policy));
+                }
             }
         }
         var used = new HashSet<Integer>();
         var sources = new HashSet<Source>();
-        Map<String,Attribution> entries = new HashMap<>();
+        Map<String,Object> rawEntries = object(root.get("attributions"));
+        Map<String,Attribution> entries = new HashMap<>(rawEntries.size()*4/3+1);
         MessageDigest hash = sha256();
-        var rows = object(root.get("attributions")).entrySet().iterator();
+        StringBuilder canonical = new StringBuilder();
+        var rows = rawEntries.entrySet().iterator();
         while (rows.hasNext()) {
             var entry = rows.next();
             if (!SHA256.matcher(entry.getKey()).matches()) throw new JSONException("invalid attribution identifier");
             Attribution attribution;
+            CanonicalPolicy encoded = null;
             if (format == 2) {
                 List<?> row = array(entry.getValue());
                 if (row.size() != 3) throw new JSONException("invalid attribution link");
@@ -114,13 +128,16 @@ record PackageManifest(int format, int schema, String version, String unicode, S
                 if (index < 0 || index >= policies.size()) throw new JSONException("unknown attribution policy");
                 used.add(index);
                 attribution = new Attribution(policies.get(index),requiredText(row.get(1)),requiredText(row.get(2)));
+                if (index < encodedPolicies.size()) encoded = encodedPolicies.get(index);
             } else {
                 Map<String,Object> row = object(entry.getValue());
                 if (!row.keySet().equals(ATTRIBUTION_FIELDS)) throw new JSONException("invalid attribution fields");
                 attribution = new Attribution(policy(row),requiredText(row.get("locator")),
                         requiredText(row.get("modification")));
             }
-            if (!matchesId(hash,entry.getKey(),attribution)) throw new JSONException("attribution identifier mismatch");
+            if (!matchesId(hash,entry.getKey(),attribution,encoded,canonical)) {
+                throw new JSONException("attribution identifier mismatch");
+            }
             sources.add(attribution.policy().source());
             entries.put(entry.getKey(),attribution);
             rows.remove();
@@ -142,24 +159,41 @@ record PackageManifest(int format, int schema, String version, String unicode, S
     }
 
     /** Matches Python json.dumps(record, sort_keys=True) with its default ASCII escaping. */
-    private static boolean matchesId(MessageDigest hash,String id,Attribution record) {
-        Policy policy = record.policy();
-        StringBuilder canonical = new StringBuilder("{\"attribution\": ");
-        quote(canonical,policy.credit()).append(", \"license_id\": ");
-        quote(canonical,policy.license()).append(", \"locator\": ");
+    private static boolean matchesId(MessageDigest hash,String id,Attribution record,
+                                     CanonicalPolicy encoded,StringBuilder canonical) {
+        canonical.setLength(0);
+        if (encoded == null) appendPolicyPrefix(canonical,record.policy());
+        else hash.update(encoded.prefix());
         quote(canonical,record.locator()).append(", \"modification\": ");
-        quote(canonical,record.modification()).append(", \"snapshot\": ");
-        quote(canonical,policy.source().snapshot()).append(", \"source\": ");
-        quote(canonical,policy.source().name()).append(", \"source_url\": ");
-        quote(canonical,policy.source().url()).append(", \"terms_url\": ");
-        quote(canonical,policy.terms()).append('}');
-        byte[] digest = hash.digest(canonical.toString().getBytes(StandardCharsets.US_ASCII));
+        quote(canonical,record.modification());
+        if (encoded == null) appendPolicySuffix(canonical,record.policy());
+        hash.update(ascii(canonical));
+        if (encoded != null) hash.update(encoded.suffix());
+        byte[] digest = hash.digest();
         for (int i = 0; i < digest.length; i++) {
             if (id.charAt(2*i) != HEX[(digest[i] & 255) >>> 4] || id.charAt(2*i+1) != HEX[digest[i] & 15]) {
                 return false;
             }
         }
         return true;
+    }
+
+    private static StringBuilder appendPolicyPrefix(StringBuilder canonical,Policy policy) {
+        canonical.append("{\"attribution\": ");
+        quote(canonical,policy.credit()).append(", \"license_id\": ");
+        return quote(canonical,policy.license()).append(", \"locator\": ");
+    }
+
+    private static StringBuilder appendPolicySuffix(StringBuilder canonical,Policy policy) {
+        canonical.append(", \"snapshot\": ");
+        quote(canonical,policy.source().snapshot()).append(", \"source\": ");
+        quote(canonical,policy.source().name()).append(", \"source_url\": ");
+        quote(canonical,policy.source().url()).append(", \"terms_url\": ");
+        return quote(canonical,policy.terms()).append('}');
+    }
+
+    private static byte[] ascii(StringBuilder value) {
+        return value.toString().getBytes(StandardCharsets.US_ASCII);
     }
 
     private static StringBuilder quote(StringBuilder buffer,String value) {

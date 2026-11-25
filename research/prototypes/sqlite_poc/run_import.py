@@ -14,7 +14,7 @@ def main() -> None:
     parser.add_argument('source',type=Path)
     parser.add_argument('output',type=Path,help='New .sqlite file in an ignored local data directory')
     parser.add_argument('--limit',type=int,default=100)
-    parser.add_argument('--method', choices=('first', 'random', 'exact'), default='first')
+    parser.add_argument('--method', choices=('first', 'random', 'exact','ranked'), default='first')
     parser.add_argument('--seed', type=int, default=0)
     args = parser.parse_args()
     if args.output.suffix.lower() not in ('.sqlite','.db','.sqlite3'):

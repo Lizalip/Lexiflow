@@ -15,6 +15,7 @@ from itertools import islice
 from pathlib import Path
 from typing import BinaryIO
 from prototype import NORMALIZATION_VERSION, normalize, snapshot_id, integrity
+from candidate_rank import choose
 
 SOURCE = 'Kaikki / Russian Wiktionary / English'
 SOURCE_URL = 'https://kaikki.org/ruwiktionary/Английский/index.html'
@@ -50,6 +51,16 @@ def decode_record(raw: bytes) -> object:
 
 
 def sample_lines(stream: BinaryIO, limit: int, method: str, seed: int, targets: set[str], stats: Counter):
+    if method == 'ranked':
+        selected = choose(stream,limit,seed,text,decode_record,stats)
+        stream.seek(0)
+        for number,raw in enumerate(stream,1):
+            if number in selected:
+                yield number,raw
+                selected.remove(number)
+                if not selected:
+                    return
+        return
     lines = enumerate(stream, 1)
     if method == 'first':
         for row in islice(lines, limit):
@@ -96,9 +107,10 @@ def import_sample(conn: sqlite3.Connection, input_path: Path, *, limit: int = 10
     Existing database or file is never overwritten. SHA-256 covers the full snapshot.
     The sample is sequential and not statistically representative.
     """
-    if not isinstance(limit,int) or isinstance(limit,bool) or not 1 <= limit <= 1000:
-        raise ValueError('experimental limit must be 1..1000')
-    if method not in ('first', 'random', 'exact') or (method == 'exact') != bool(targets):
+    maximum = 5000 if method == 'ranked' else 1000
+    if not isinstance(limit,int) or isinstance(limit,bool) or not 1 <= limit <= maximum:
+        raise ValueError(f'experimental limit must be 1..{maximum}')
+    if method not in ('first', 'random', 'exact','ranked') or (method == 'exact') != bool(targets):
         raise ValueError('exact sampling requires nonempty targets')
     if conn.execute('SELECT count(*) FROM release').fetchone()[0]:
         raise ValueError('use a fresh experimental database')
@@ -112,12 +124,14 @@ def import_sample(conn: sqlite3.Connection, input_path: Path, *, limit: int = 10
     ids: Counter = Counter()
     with input_path.open('rb') as stream:
         before = os.fstat(stream.fileno())
+        if method == 'ranked' and before.st_size > 256 * 1024**2:
+            raise ValueError('ranked pilot source exceeds 256 MiB')
         digest = digest_file(stream)
         stream.seek(0)
         manifest = dict(source_url=SOURCE_URL, snapshot_sha256=digest, size_bytes=before.st_size,
                         source_version=source_version, adapter_version=ADAPTER_VERSION,
                         normalization_version=NORMALIZATION_VERSION, sample_limit=limit,
-                        sample_method=method, seed=seed if method == 'random' else None,
+                        sample_method=method, seed=seed if method in ('random','ranked') else None,
                         exact_target_count=len(targets or ()))
         if targets:
             manifest['target_config_sha256'] = hashlib.sha256(json_text(sorted(targets)).encode()).hexdigest()
@@ -170,7 +184,8 @@ def import_sample(conn: sqlite3.Connection, input_path: Path, *, limit: int = 10
                     tags = {k:items(sense,k,sl) for k in ('tags','raw_tags')}
                     if any(not text(tag) for values in tags.values() for tag in values):
                         issue(sl,'invalid_tag')
-                    if 'form-of' in tags['tags'] or sense.get('form_of'):
+                    if 'form-of' in tags['tags'] or sense.get('form_of') or sense.get('alt_of'):
+                        tags['form_reference'] = True
                         issue(sl,'form_reference')
                         stats['form_reference_senses'] += 1
                     conn.execute('INSERT INTO sense VALUES (?,?,?,?,?)',(sid,entry_id,si+1,evidence(sl,external),json_text(tags)))
@@ -239,4 +254,7 @@ def import_sample(conn: sqlite3.Connection, input_path: Path, *, limit: int = 10
     report['pending_evidence'] = conn.execute("SELECT count(*) FROM evidence WHERE rights='pending'").fetchone()[0]
     report['matched_target_spellings'] = sum(bool(stats['target:'+target]) for target in targets or ())
     report['truncated_target_records'] = max(0, stats['target_matches'] - limit)
+    if method == 'ranked':
+        report['selection'] = {key:value for key,value in stats.items() if key.startswith(('selection_','selected_'))}
+        report['selection']['eligible_normalized_spellings'] = stats['eligible_normalized_spellings']
     return report

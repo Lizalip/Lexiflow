@@ -11,7 +11,7 @@ import identity
 from debug_package import make
 from kaikki import import_sample
 from prototype import create_database, normalize, query_plan, release_lookup, research_lookup
-from release_package import STAGING_METADATA, checksum, export_package, record_rights, validate_package
+from release_package import STAGING_METADATA, checksum, export_package, readiness, record_rights, validate_package
 from review_queue import IDENTITY, apply, progress, suggest, tasks, validate
 
 
@@ -95,7 +95,10 @@ class ReleaseTests(unittest.TestCase):
 
     def test_export_filters_parents_and_excluded_elements(self):
         apply(self.staging,self.approved)
+        self.assertEqual(readiness(self.staging,self.registry)['human_translation_decisions'],2)
+        self.assertEqual(readiness(self.staging,self.registry)['approved_with_rights'],0)
         self.clear_core()
+        self.assertEqual(readiness(self.staging,self.registry)['with_identity'],1)
         self.rights('line/1/senses/0/examples/0/translation')
         self.rights('line/1/forms/0','excluded')
         out = self.path/'filtered'

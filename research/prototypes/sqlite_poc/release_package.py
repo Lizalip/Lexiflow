@@ -101,6 +101,51 @@ def provenance(conn):
     """)}
 
 
+CORE_SQL = """
+    SELECT e.id,e.spelling,e.pos,e.search_key,e.evidence_id,s.id,s.position,s.evidence_id,
+           t.wording,t.search_key,t.evidence_id,g.evidence_id,g.sense_id
+    FROM translation t JOIN semantic_decision d ON d.translation_id=t.id AND d.method='human'
+    JOIN gloss g ON g.id=d.gloss_id JOIN sense s ON s.id=t.sense_id JOIN entry e ON e.id=s.entry_id
+    WHERE t.lang='ru' AND e.lang='en' ORDER BY e.id,s.position,t.id
+"""
+
+
+def approved_core(src,rights):
+    for row in src.execute(CORE_SQL):
+        e,_,_,_,ee,s,_,se,_,_,te,ge,gloss_sense = row
+        if not all(i in rights for i in (ee,se,te,ge)):
+            continue
+        if gloss_sense != s or len({(rights[i]['source'],rights[i]['snapshot']) for i in (ee,se,te,ge)}) != 1:
+            raise ValueError('inconsistent translation provenance')
+        yield row
+
+
+def readiness(src,registry=None):
+    tables = {name for name, in src.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    report = dict(
+        entries=src.execute('SELECT count(*) FROM entry').fetchone()[0],
+        human_translation_decisions=0, approved_with_rights=0, with_identity=0,
+        registry_supplied=registry is not None,
+    )
+    if 'semantic_decision' not in tables:
+        return report
+    report['human_translation_decisions'] = src.execute("""
+        SELECT count(*) FROM semantic_decision WHERE method='human' AND translation_id IS NOT NULL
+    """).fetchone()[0]
+    if 'rights_decision' not in tables:
+        return report
+    rights = provenance(src)
+    for e,_,_,_,ee,s,_,se,*_ in approved_core(src,rights):
+        report['approved_with_rights'] += 1
+        if registry is not None:
+            keys = [('entry',rights[ee]['snapshot'],e),('sense',rights[se]['snapshot'],s)]
+            if all(registry.execute("""
+                    SELECT 1 FROM identity_binding WHERE kind=? AND snapshot=? AND local_id=?
+                """, key).fetchone() is not None for key in keys):
+                report['with_identity'] += 1
+    return report
+
+
 def copy_eligible(src, dest, registry, version):
     rights = provenance(src)
     used = {}
@@ -112,25 +157,20 @@ def copy_eligible(src, dest, registry, version):
         return ref
 
     entries, senses = {}, {}
-    sql = """
-        SELECT e.id,e.spelling,e.pos,e.search_key,e.evidence_id,s.id,s.position,s.evidence_id,
-               t.wording,t.search_key,t.evidence_id,g.evidence_id,g.sense_id
-        FROM translation t JOIN semantic_decision d ON d.translation_id=t.id AND d.method='human'
-        JOIN gloss g ON g.id=d.gloss_id JOIN sense s ON s.id=t.sense_id JOIN entry e ON e.id=s.entry_id
-        WHERE t.lang='ru' AND e.lang='en' ORDER BY e.id,s.position,t.id
-    """
-    for e,spelling,pos,ek,ee,s,position,se,word,tk,te,ge,gloss_sense in src.execute(sql):
-        if not all(i in rights for i in (ee,se,te,ge)):
-            continue
-        if gloss_sense != s or len({(rights[i]['source'],rights[i]['snapshot']) for i in (ee,se,te,ge)}) != 1:
-            raise ValueError('inconsistent translation provenance')
+    persisted = set()
+
+    def claim(kind,eid,local_id):
+        value = identity.lookup(registry,kind,rights[eid]['snapshot'],local_id)
+        if value in persisted:
+            raise ValueError('duplicate persistent identity')
+        persisted.add(value)
+        return value
+    for e,spelling,pos,ek,ee,s,position,se,word,tk,te,ge,_ in approved_core(src,rights):
         if e not in entries:
-            entries[e] = identity.lookup(registry,'entry',rights[ee]['snapshot'],e)
+            entries[e] = claim('entry',ee,e)
             dest.execute('INSERT INTO entry VALUES (?,?,?,?,?)',(entries[e],spelling,pos,ek,attr(ee)))
         if s not in senses:
-            senses[s] = identity.lookup(registry,'sense',rights[se]['snapshot'],s)
-            if senses[s] in entries.values():
-                raise ValueError('duplicate persistent identity across kinds')
+            senses[s] = claim('sense',se,s)
             dest.execute('INSERT INTO sense VALUES (?,?,?,?)',(senses[s],entries[e],position,attr(se)))
         dest.execute('INSERT INTO translation(sense_id,wording,search_key,attribution_id,origin_attribution_id) VALUES (?,?,?,?,?)',
                      (senses[s],word,tk,attr(te),attr(ge)))
@@ -295,10 +335,13 @@ def main():
         ('bind', ('registry','decisions')),
         ('export', ('staging','registry','package','corpus_version')),
         ('validate', ('package',)),
+        ('readiness', ('staging',)),
     ):
         command = commands.add_parser(name)
         if name == 'export':
             command.add_argument('--schema-version',type=int,choices=(1,2),default=1)
+        if name == 'readiness':
+            command.add_argument('--registry',type=Path)
         for arg in arguments:
             command.add_argument(arg, type=str if arg == 'corpus_version' else Path)
     args = parser.parse_args()
@@ -307,6 +350,15 @@ def main():
         path = getattr(args,name,None)
         if path is not None and not path.resolve().is_relative_to((data/root).resolve()):
             parser.error(f'{name} must be under research/data/{root}/')
+    if args.command == 'readiness':
+        with connect(args.staging,'ro') as src:
+            if args.registry is None:
+                report = readiness(src)
+            else:
+                with connect(args.registry,'ro') as registry:
+                    report = readiness(src,registry)
+        print(json.dumps(report))
+        return
     if args.command in ('rights','bind'):
         with args.decisions.open(encoding='utf-8') as stream:
             records = [json.loads(line) for line in stream]

@@ -1,5 +1,8 @@
 """Local semantic review. Approval and clearance are independent transactions."""
 import argparse
+import csv
+from bisect import insort
+from collections import Counter, defaultdict
 import hashlib
 import json
 import sqlite3
@@ -7,6 +10,7 @@ from contextlib import closing
 from pathlib import Path
 
 from prototype import normalize
+from candidate_rank import FORM_TAGS, triage
 
 CLASSES = {'source_gloss', 'candidate_translation', 'definition', 'form-reference',
            'unclear', 'mixed_gloss', 'unsuitable'}
@@ -16,7 +20,8 @@ EDITOR_FIELDS = {'proposed_translation', 'decision', 'reviewer', 'method'}
 GLOSS_ROWS = """
     SELECT e.id AS entry_id, s.id AS sense_id, r.sha256 AS snapshot_sha256,
            ev.locator, ev.rights, g.body AS gloss, e.spelling AS headword,
-           e.pos, s.position AS sense_position, g.evidence_id, g.lang, g.id AS gloss_id
+           e.pos, s.position AS sense_position, g.evidence_id, g.lang, g.id AS gloss_id,
+           s.raw_tags, (SELECT count(*) FROM gloss g2 WHERE g2.sense_id=s.id) AS gloss_count
     FROM gloss g JOIN sense s ON s.id=g.sense_id JOIN entry e ON e.id=s.entry_id
     JOIN evidence ev ON ev.id=g.evidence_id JOIN release r ON r.id=ev.release_id
 """
@@ -59,6 +64,77 @@ def tasks(conn):
         yield task
 
 
+def classify(task):
+    raw = json.loads(task['raw_tags'])
+    tags = raw.get('tags',[]) if isinstance(raw,dict) else raw
+    form = (isinstance(raw,dict) and raw.get('form_reference',False)) or any(
+        isinstance(tag,str) and tag in FORM_TAGS for tag in tags)
+    classification, priority, proposed, reason = triage(task['gloss'],form)
+    if priority == 'standard' and task['gloss_count'] > 1:
+        classification, priority, proposed, reason = (
+            'unclear','specialist',None,'multiple gloss rows for the same source sense')
+    return dict(task,classification=classification,review_priority=priority,proposed_translation=proposed,
+                decision='proposed',method='rule-assisted',reviewer='triage-v1',reason=reason)
+
+
+def triage_rows(conn, priority=None):
+    for task in tasks(conn):
+        result = classify(task)
+        if priority is None or priority == result['review_priority']:
+            yield result
+
+
+def stratify(rows, limit, seed):
+    groups = defaultdict(list)
+    for row in rows:
+        priority = row['review_priority']
+        if priority == 'exclude':
+            continue
+        group = (priority,row['pos'] or '',bool(row['examples']))
+        key = repr((seed,row['snapshot_sha256'],row['locator'])).encode()
+        bucket = groups[group]
+        insort(bucket,(hashlib.sha256(key).digest(),row),key=lambda item:item[0])
+        if len(bucket) > limit:
+            bucket.pop()
+    queues = [iter(groups[group]) for group in sorted(groups)]
+    count = 0
+    while queues and count < limit:
+        active = []
+        for queue in queues:
+            row = next(queue,None)
+            if row is not None:
+                yield row[1]
+                count += 1
+                if count == limit:
+                    return
+                active.append(queue)
+        queues = active
+
+
+def export_triage(conn, path, *, priority=None, limit=None, seed=42):
+    rows = triage_rows(conn,priority)
+    if limit is not None:
+        rows = stratify(rows,limit,seed)
+    stats = Counter()
+    with path.open('x',encoding='utf-8-sig' if path.suffix == '.csv' else 'utf-8',newline='') as stream:
+        writer = None
+        for row in rows:
+            stats[row['review_priority']] += 1
+            if path.suffix == '.csv':
+                if writer is None:
+                    writer = csv.DictWriter(stream,fieldnames=list(row))
+                    writer.writeheader()
+                def cell(value):
+                    if isinstance(value,(list,dict)):
+                        return json.dumps(value,ensure_ascii=False)
+                    # Spreadsheet apps can interpret leading symbols as formulas.
+                    return "'" + value if isinstance(value,str) and value.lstrip().startswith(('=','+','-','@')) else value
+                writer.writerow({key:cell(value) for key,value in row.items()})
+            else:
+                stream.write(json.dumps(row,ensure_ascii=False)+'\n')
+    return dict(stats)
+
+
 def checked(conn, decisions, *, approval=False):
     seen = set()
     for index, decision in enumerate(decisions, 1):
@@ -75,7 +151,7 @@ def checked(conn, decisions, *, approval=False):
             status = decision['decision']
             method = decision['method']
             proposed = decision['proposed_translation']
-            if status not in ('proposed','approved') or method not in ('human','ai-assisted'):
+            if status not in ('proposed','approved') or method not in ('human','ai-assisted','rule-assisted'):
                 raise ValueError(f'decision {index}: invalid decision or method')
             if status == 'approved' and method != 'human':
                 raise ValueError(f'decision {index}: approval requires a human review')
@@ -159,16 +235,24 @@ def progress(conn):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=('export','suggest','validate','apply','progress'))
+    parser.add_argument('action', choices=('export','suggest','triage','validate','apply','progress'))
     parser.add_argument('database', type=Path)
     parser.add_argument('jsonl', type=Path, nargs='?')
+    parser.add_argument('--priority',choices=('standard','specialist','exclude'))
+    parser.add_argument('--stratified',type=int,choices=range(1,501),metavar='1..500')
+    parser.add_argument('--seed',type=int,default=42)
     args = parser.parse_args()
     data = Path(__file__).resolve().parents[2] / 'data'
     if args.action == 'apply' and not args.database.resolve().is_relative_to((data/'processed').resolve()):
         parser.error('apply requires a local database under research/data/processed/')
-    if args.action != 'progress' and (args.jsonl is None or args.jsonl.suffix != '.jsonl'
+    suffixes = ('.jsonl','.csv') if args.action == 'triage' else ('.jsonl',)
+    if args.action != 'progress' and (args.jsonl is None or args.jsonl.suffix not in suffixes
             or not args.jsonl.resolve().is_relative_to((data/'review').resolve())):
-        parser.error('use a .jsonl file under research/data/review/')
+        parser.error('use a supported file under research/data/review/')
+    if args.action != 'triage' and (args.priority is not None or args.stratified is not None):
+        parser.error('filters apply to triage only')
+    if args.stratified and args.priority == 'exclude':
+        parser.error('stratified review excludes form-only or no-content tasks')
     mode = 'rw' if args.action == 'apply' else 'ro'
     with closing(sqlite3.connect(args.database.resolve().as_uri() + '?mode=' + mode, uri=True)) as conn:
         conn.row_factory = sqlite3.Row
@@ -179,6 +263,8 @@ def main():
                     stream.write(json.dumps(row, ensure_ascii=False) + '\n')
         elif args.action == 'progress':
             print(json.dumps(progress(conn)))
+        elif args.action == 'triage':
+            print(json.dumps(export_triage(conn,args.jsonl,priority=args.priority,limit=args.stratified,seed=args.seed)))
         else:
             with args.jsonl.open(encoding='utf-8') as stream:
                 op = apply if args.action == 'apply' else validate

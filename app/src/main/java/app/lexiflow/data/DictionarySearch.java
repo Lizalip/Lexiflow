@@ -1,6 +1,7 @@
 package app.lexiflow.data;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 /** Use indexed ranges, then choose the best match for each persistent sense. */
@@ -25,6 +26,25 @@ final class DictionarySearch {
             arguments.add(key);
             if (end != null) arguments.add(end);
         }
+        return selectHits(hits,reverse,arguments);
+    }
+
+    static Query russianStressFallback(String key) {
+        // A bounded set of exact indexed alternatives for a single unstressed Russian word.
+        if (!key.matches("[а-яё]{1,32}")) return null;
+        List<String> variants = new ArrayList<>();
+        for (int i=0;i<key.length();i++) {
+            if ("аеёиоуыэюя".indexOf(key.charAt(i))>=0) {
+                variants.add(key.substring(0,i+1)+"\u0301"+key.substring(i+1));
+            }
+        }
+        if (variants.isEmpty()) return null;
+        String slots = String.join(",",Collections.nCopies(variants.size(),"?"));
+        String hits = "SELECT sense_id,'0'||search_key AS rank FROM translation WHERE search_key IN ("+slots+")";
+        return selectHits(hits,true,variants);
+    }
+
+    private static Query selectHits(String hits,boolean reverse,List<String> arguments) {
         String sql = "WITH hits AS (" + hits + "), grouped AS (SELECT sense_id,min(rank) AS best FROM hits GROUP BY sense_id),"
                 + " selected AS (SELECT g.sense_id,g.best FROM grouped g JOIN sense s ON s.id=g.sense_id"
                 + " ORDER BY g.best,s.entry_id,s.position,s.id LIMIT 50)"

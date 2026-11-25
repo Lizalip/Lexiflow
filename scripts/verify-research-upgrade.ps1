@@ -4,7 +4,8 @@ param(
     [string]$Sdk = "$env:USERPROFILE/AppData/Local/Android/Sdk",
     [string]$Jdk = 'C:/Program Files/Android/Android Studio/jbr',
     [switch]$UpdateResearch,
-    [switch]$Measure30000
+    [switch]$Measure30000,
+    [switch]$CheckRollback
 )
 
 $ErrorActionPreference = 'Stop'
@@ -112,6 +113,11 @@ try {
             $larger = Build-Apk "$artifacts/research-scaling/30000" '30000-isolated'
             & $adb -s $serial install -r -t $larger
             Run-Test 'readsExpandedDictionaryAndPreservesLearning' '30000-verify'
+        }
+        if ($CheckRollback) {
+            Run-Test 'seedMeaningAvailableOnlyInExpandedCorpus' 'expanded-seed-rollback'
+            & $adb -s $serial install -r -t $initial
+            Run-Test 'preservesLearningWhenAnEntryDisappearsOnRollback' '5000-rollback'
         }
         $crashes = @(& $adb -s $serial logcat -d -b crash -v epoch | Where-Object {
             $_ -match '^\s*([0-9]+)\.' -and [long]$Matches[1] -ge $start -and

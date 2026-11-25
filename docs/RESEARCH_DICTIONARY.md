@@ -80,7 +80,9 @@ $pair = "$base/processed/research-app/dictionary-research"
 .\gradlew.bat :app:assembleDebug "-Plexiflow.research=true" "-Plexiflow.python=$py"
 ```
 
-Для сборки установленного на Samsung варианта добавьте `-Plexiflow.researchDictionary=research/data/processed/research-scaling/20000`. Для локального расширенного варианта укажите `research-scaling/30000` с тем же базовым путём. Инструментальный прогон `scripts/verify-research-upgrade.ps1 -Python $py -Measure30000` использует отдельный ID `app.lexiflow.researchcheck`. Ключ `-UpdateResearch` после проверок разрешает обновление пользовательского Research поверх текущей установки.
+Для сборки установленного на Samsung варианта добавьте `-Plexiflow.researchDictionary=research/data/processed/research-scaling/20000`. Для локального расширенного варианта укажите `research-scaling/30000` с тем же базовым путём. Инструментальный прогон `scripts/verify-research-upgrade.ps1 -Python $py -Measure30000` использует отдельный ID `app.lexiflow.researchcheck`. Параметр `-CheckRollback` проверяет возврат к 5 000 в изолированном профиле. Ключ `-UpdateResearch` после проверок разрешает обновление пользовательского Research поверх текущей установки.
+
+В русско-английском направлении попробуйте `понимать` и `устойчивый`. При пустой буквальной и префиксной выдаче исследовательский режим перебирает точные ключи с одним ударением. Результат сохраняет исходное написание перевода. Версия активного пакета видна в исследовательской плашке. IPA находится в начале статьи, независимые определения — после значений.
 
 Если пара уже сформирована, начните с её проверки. Экспорт требует нового каталога и сохраняет существующую пару. Для установки выберите нужное устройство в Studio, затем установите локальный APK из `.gradle/research-build/app/outputs/apk/debug/app-debug.apk`. В списке приложений откройте **LexiFlow Research**. На Samsung проверьте видимость пометки источника, `book`, обратный поиск `книга` и сохранённую карточку после перезапуска. Обычный профиль и личная Room-база изолированы по application ID.
 

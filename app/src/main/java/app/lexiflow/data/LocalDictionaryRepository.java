@@ -572,9 +572,17 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
         if (database == null || query.codePointCount(0, query.length()) > 256) return Collections.emptyList();
         String key = SearchNormalization.normalize(query);
         if (key.isEmpty()) return Collections.emptyList();
+        List<Hit> results = queryHits(DictionarySearch.ranked(key,reverse));
+        if (reverse && results.isEmpty() && manifest.research()) {
+            var fallback = DictionarySearch.russianStressFallback(key);
+            if (fallback != null) return queryHits(fallback);
+        }
+        return results;
+    }
+
+    private List<Hit> queryHits(DictionarySearch.Query query) {
         List<Hit> results = new ArrayList<>();
-        var ranked = DictionarySearch.ranked(key,reverse);
-        try (Cursor cursor = database.rawQuery(ranked.sql(),ranked.arguments())) {
+        try (Cursor cursor = database.rawQuery(query.sql(),query.arguments())) {
             while (cursor.moveToNext()) results.add(new Hit(cursor.getString(0),cursor.getString(1),
                     cursor.getString(2),cursor.getString(3),cursor.getInt(4),cursor.getString(5),cursor.getString(6)));
         }

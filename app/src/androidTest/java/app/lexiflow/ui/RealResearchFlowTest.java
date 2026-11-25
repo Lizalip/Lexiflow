@@ -14,6 +14,7 @@ import app.lexiflow.R;
 import app.lexiflow.data.DictionaryRepository;
 import app.lexiflow.data.LocalDictionaryRepository;
 import app.lexiflow.data.PersonalDatabase;
+import app.lexiflow.data.ReviewScheduler;
 import java.io.File;
 import java.util.Arrays;
 import java.util.UUID;
@@ -148,6 +149,44 @@ public class RealResearchFlowTest {
         }
     }
 
+    @Test public void resolvesUnaccentedRussianQueriesThroughTheResearchIndex() throws Exception {
+        var target = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        assumeTrue("app.lexiflow.researchcheck".equals(target.getPackageName()));
+        var dictionary = new LocalDictionaryRepository(target);
+        try {
+            dictionary.load();
+            assertEquals(DictionaryRepository.Status.AVAILABLE,dictionary.status());
+            var literal = dictionary.search("понима\u0301ть",true);
+            measure("stress-fallback",5,() -> {
+                var hits = dictionary.search("  ПОНИМАТЬ   ",true);
+                assertTrue(hits.stream().anyMatch(row -> row.spelling().equals("understand")
+                        && row.translation().equals("понима\u0301ть")));
+                assertTrue(hits.stream().allMatch(row -> literal.stream()
+                    .anyMatch(exact -> exact.senseId().equals(row.senseId()))));
+            });
+            assertTrue(dictionary.search("устойчивый",true).stream()
+                    .anyMatch(row -> row.spelling().equals("steady")));
+            assertFalse(dictionary.search("книга",true).isEmpty());
+        } finally {
+            dictionary.close();
+        }
+        try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
+            awaitAvailable(scenario);
+            onView(withId(R.id.direction)).perform(click());
+            long typed = SystemClock.elapsedRealtime();
+            query("ПОНИМАТЬ");
+            awaitDictionary(scenario,state -> state.hits().stream().anyMatch(row -> row.spelling().equals("understand")),
+                    "unaccented Russian query returned a result");
+            Log.i(TAG,"Russian input with debounce and rendered match ms="+(SystemClock.elapsedRealtime()-typed));
+            capture(scenario,"10-reverse-results");
+            onView(withId(R.id.direction)).perform(click());
+            query("light");
+            awaitDictionary(scenario,state -> state.hits().stream().filter(row -> row.spelling().equals("light"))
+                    .map(DictionaryRepository.Hit::pos).distinct().count()>=2,"multiple parts of speech available");
+            capture(scenario,"11-multiple-pos");
+        }
+    }
+
     @Test public void seedAdditionalUpgradeSaves() {
         var target = InstrumentationRegistry.getInstrumentation().getTargetContext();
         assumeTrue("app.lexiflow.researchcheck".equals(target.getPackageName()));
@@ -181,6 +220,71 @@ public class RealResearchFlowTest {
         } finally {
             personal.close();
             dictionary.close();
+        }
+    }
+
+    @Test public void seedMeaningAvailableOnlyInExpandedCorpus() {
+        var target = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        assumeTrue("app.lexiflow.researchcheck".equals(target.getPackageName()));
+        var dictionary = new LocalDictionaryRepository(target);
+        var personal = Room.databaseBuilder(target,PersonalDatabase.class,"lexiflow-personal.sqlite").build();
+        try {
+            dictionary.load();
+            var hit = dictionary.search("hypothesis",false).stream()
+                    .filter(row -> "hypothesis".equals(row.spelling())).findFirst().orElseThrow();
+            var saved = new PersonalDatabase.Saved();
+            saved.entryId = hit.entryId();
+            saved.senseId = hit.senseId();
+            saved.spelling = hit.spelling();
+            saved.answer = hit.translation();
+            saved.custom = CUSTOM;
+            saved.note = NOTE;
+            var library = personal.library();
+            long id = library.save(saved);
+            assertTrue(id>0);
+            long now = System.currentTimeMillis();
+            var card = new PersonalDatabase.Card();
+            card.savedId = id;
+            card.due = now;
+            assertTrue(library.addCard(card)>0);
+            var next = library.next(now);
+            assertNotNull(next);
+            assertEquals("hypothesis",next.spelling);
+            assertTrue(library.grade(next,2,now,ReviewScheduler::basic));
+        } finally {
+            personal.close();
+            dictionary.close();
+        }
+    }
+
+    @Test public void preservesLearningWhenAnEntryDisappearsOnRollback() throws Exception {
+        var target = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        assumeTrue("app.lexiflow.researchcheck".equals(target.getPackageName()));
+        var personal = Room.databaseBuilder(target,PersonalDatabase.class,"lexiflow-personal.sqlite").build();
+        try {
+            var library = personal.library();
+            var saved = library.saved().stream().filter(row -> "hypothesis".equals(row.spelling))
+                    .findFirst().orElseThrow();
+            assertEquals(NOTE,saved.note);
+            assertEquals(CUSTOM,saved.custom);
+            assertTrue(library.cardCount()>=1);
+            assertTrue(library.reviewCount()>=1);
+            assertTrue(library.successCount()>=1);
+        } finally {
+            personal.close();
+        }
+        try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
+            awaitAvailable(scenario);
+            onView(withId(R.id.vocabulary)).perform(click());
+            await(scenario,state -> state.saved().stream().anyMatch(row -> "hypothesis".equals(row.spelling)),
+                    "saved word remains available despite missing article");
+            onView(withText(startsWith("hypothesis · "+CUSTOM))).perform(scrollTo(),click());
+            onView(withText(R.string.open_saved)).perform(click());
+            awaitDictionary(scenario,state -> state.status()==DictionaryRepository.Status.AVAILABLE
+                    && state.entry()==null,"smaller dictionary reports an unavailable article");
+            onView(withText(R.string.entry_unavailable)).check(matches(isDisplayed()));
+            back();
+            onView(withText(startsWith("hypothesis · "+CUSTOM))).check(matches(isDisplayed()));
         }
     }
 

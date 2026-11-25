@@ -1,8 +1,12 @@
 import tempfile
 import unittest
+import sqlite3
+from contextlib import closing
 from pathlib import Path
+from unittest.mock import patch
 
-from editor_workspace import write_html
+from editor_workspace import diagnostic_alignment, write_html
+from prototype import create_database
 
 
 class WorkspaceTest(unittest.TestCase):
@@ -22,3 +26,27 @@ class WorkspaceTest(unittest.TestCase):
             self.assertIn('decision:"proposed"',text)
             self.assertNotIn('decision:"approved"',text)
             self.assertNotIn('<script src=',text)
+
+    def test_alignment_keeps_source_senses_separate_and_marks_ambiguous_pairs(self):
+        with closing(sqlite3.connect(':memory:')) as free, closing(sqlite3.connect(':memory:')) as kaikki:
+            for index,db in enumerate((free,kaikki),1):
+                create_database(db)
+                with db:
+                    db.execute("INSERT INTO source VALUES (1,'fixture')")
+                    db.execute("INSERT INTO release VALUES (1,1,?,'fixture')",(str(index)*64,))
+                    db.executemany('INSERT INTO evidence(id,release_id,locator) VALUES (?,1,?)',[
+                        (1,'entry'),(2,'sense/1'),(3,'gloss/1'),(4,'sense/2'),(5,'example'),
+                    ])
+                    db.execute("INSERT INTO entry VALUES ('e','en','sample','sample','noun',1)")
+                    db.execute("INSERT INTO sense VALUES (?,'e',1,2,'[]')",(f'sense-{index}',))
+                    db.execute("INSERT INTO gloss VALUES (1,?,'ru','пример','source_gloss',1,3)",(f'sense-{index}',))
+                    if index == 2:
+                        db.execute("INSERT INTO sense VALUES ('alternate','e',2,4,'[]')")
+                        db.execute("INSERT INTO example VALUES (1,'alternate','en','fixture',NULL,5)")
+            with patch('editor_workspace.diagnostic_spellings',return_value={'sample'}):
+                rows, counts = diagnostic_alignment(free,kaikki)
+                self.assertEqual((rows,counts),diagnostic_alignment(free,kaikki))
+            self.assertEqual(len(rows),2)
+            self.assertTrue(all(row['status']=='pending' and row['other_same_pos']==2 for row in rows))
+            self.assertEqual({row['kaikki_sense'] for row in rows},{'sense-2','alternate'})
+            self.assertTrue(all(row['free_snapshot'] != row['kaikki_snapshot'] for row in rows))

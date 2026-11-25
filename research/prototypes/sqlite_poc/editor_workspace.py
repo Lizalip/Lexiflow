@@ -125,6 +125,61 @@ def multiword(databases, quota=12):
                      selected=Counter(row['stratum'] for row in rows),seed=SEED)
 
 
+def diagnostic_alignment(free, kaikki, quota=8):
+    """Suggest pairs on diagnostic entries only. Neither snapshot supplies a merge key."""
+    mapped_pos = {'n':'noun','v':'verb','phraseologicalUnit':'phrase','pn':'name'}
+    groups = defaultdict(list)
+    counts = Counter()
+    query = """
+        SELECT s.id AS sense_id,s.position,e.spelling,e.pos,r.sha256,ev.locator,
+               (SELECT count(*) FROM example x WHERE x.sense_id=s.id) AS examples,
+               EXISTS(SELECT 1 FROM pronunciation p WHERE p.entry_id=e.id AND p.ipa IS NOT NULL) AS ipa
+        FROM entry e JOIN sense s ON s.entry_id=e.id JOIN evidence ev ON ev.id=s.evidence_id
+        JOIN release r ON r.id=ev.release_id WHERE e.lang='en' AND e.search_key=?
+        ORDER BY s.id
+    """
+
+    def profile(db, key):
+        db.row_factory = sqlite3.Row
+        rows = []
+        for row in db.execute(query,(key,)):
+            item = dict(row)
+            item['pos'] = mapped_pos.get(item['pos'],item['pos'])
+            item['glosses'] = {normalize(text) for text, in db.execute(
+                "SELECT body FROM gloss WHERE sense_id=? AND lang='ru' AND role='source_gloss'",(item['sense_id'],))}
+            rows.append(item)
+        return rows
+
+    for key in sorted({normalize(word) for word in diagnostic_spellings()}):
+        source = profile(free,key)
+        comparison = profile(kaikki,key)
+        if not source or not comparison:
+            continue
+        counts['shared_diagnostic_spellings'] += 1
+        for left in source:
+            if not left['glosses']:
+                continue
+            peers = [right for right in comparison if left['pos'] and left['pos'] == right['pos']]
+            for right in peers:
+                overlap = bool(left['glosses'] & right['glosses'])
+                metadata = (left['examples'] == 0 and right['examples'] > 0) or (not left['ipa'] and right['ipa'])
+                if not overlap and not metadata:
+                    continue
+                group = ('shared-russian-text' if overlap else 'same-pos-metadata-only',
+                         'ambiguous' if len(peers)>1 else 'one-pos-candidate')
+                counts['/'.join(group)] += 1
+                item = dict(spelling=left['spelling'],pos=left['pos'],free_sense=left['sense_id'],
+                            free_snapshot=left['sha256'],free_locator=left['locator'],
+                            kaikki_sense=right['sense_id'],kaikki_snapshot=right['sha256'],
+                            kaikki_locator=right['locator'],free_position=left['position'],kaikki_position=right['position'],
+                            russian_text_overlap=overlap,other_same_pos=len(peers),
+                            example_candidate=left['examples']==0 and right['examples']>0,
+                            ipa_candidate=not left['ipa'] and bool(right['ipa']),status='pending')
+                priority = hashlib.sha256(f"{SEED}/{left['locator']}/{right['locator']}".encode()).digest()
+                groups[group].append((not metadata,priority,item))
+    return [item for group in sorted(groups) for _,_,item in sorted(groups[group],key=lambda row:row[:2])[:quota]],dict(counts)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('freedict',type=Path)
@@ -137,13 +192,17 @@ def main():
     with connect(args.freedict,'ro') as free, connect(args.kaikki,'ro') as kaikki:
         pilot = list(load_pilot(free,args.pilot))
         phrases, stats = multiword([free,kaikki])
+        alignment, ambiguity = diagnostic_alignment(free,kaikki)
         if len(pilot) != 200 or len({normalize(row['headword']) for row in pilot}) != 200 or not phrases:
             raise ValueError('expected the original 200-spelling pilot and a nonempty multiword queue')
     args.output.mkdir()
     write_csv(args.output/'freedict-context.csv',pilot)
     write_html(args.output/'freedict-review.html',pilot)
     write_csv(args.output/'multiword-review.csv',phrases)
-    print(json.dumps(dict(pilot_rows=len(pilot), **stats),ensure_ascii=True))
+    if alignment:
+        write_csv(args.output/'metadata-links.csv',alignment)
+    print(json.dumps(dict(pilot_rows=len(pilot),alignment_rows=len(alignment),ambiguity=ambiguity,**stats),
+                     ensure_ascii=True))
 
 
 if __name__ == '__main__':

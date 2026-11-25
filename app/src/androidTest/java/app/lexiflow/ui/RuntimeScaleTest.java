@@ -28,6 +28,52 @@ public class RuntimeScaleTest {
     private static final String TAG = "LexiFlowScale";
     private static final int REPEATS = 5;
 
+    @Test public void measuresOptInHundredThousandEntryCompactPackage() throws Exception {
+        var instrumentation = InstrumentationRegistry.getInstrumentation();
+        var testAssets = instrumentation.getContext().getAssets();
+        var target = instrumentation.getTargetContext();
+        String assets = "runtime-capacity/100000-compact";
+        Assume.assumeTrue("opt-in artificial capacity fixture",testAssets.list(assets).length == 2);
+        Assume.assumeTrue("500 MiB free for isolated package copies",
+                target.getCacheDir().getUsableSpace() >= 500L * 1024 * 1024);
+        File root = new File(target.getCacheDir(),"capacity-" + UUID.randomUUID());
+        var repository = new LocalDictionaryRepository(new ContextWrapper(target) {
+            @Override public Context getApplicationContext() { return this; }
+            @Override public File getFilesDir() { return root; }
+        });
+        try {
+            measurePss("100000 before_install");
+            long start = SystemClock.elapsedRealtimeNanos();
+            try (var json = testAssets.open(assets+"/manifest.json");
+                 var db = testAssets.open(assets+"/dictionary.sqlite")) {
+                repository.install(json,db);
+            }
+            assertEquals(DictionaryRepository.Status.AVAILABLE,repository.status());
+            assertTrue(repository.isSynthetic());
+            Log.i(TAG,"100000 install n=1 ms="+(SystemClock.elapsedRealtimeNanos()-start)/1_000_000.0);
+            measurePss("100000 after_install");
+            timed("100000 reopen",3,() -> {
+                repository.close();
+                repository.load();
+                assertEquals(DictionaryRepository.Status.AVAILABLE,repository.status());
+            });
+            timed("100000 exact",() -> assertEquals(1,repository.search("artificial-scale-000001",false).size()));
+            timed("100000 prefix",() -> assertEquals(50,repository.search("artificial-scale-0001",false).size()));
+            timed("100000 broad",() -> assertEquals(50,repository.search("artificial-",false).size()));
+            timed("100000 reverse",() -> assertEquals(50,repository.search("artificial-answer-",true).size()));
+            measurePss("100000 after_search");
+            var hits = repository.search("artificial-scale-0001",false);
+            for (var hit : hits.subList(0,5)) {
+                assertEquals(hit.spelling(),repository.entry(hit.entryId()).spelling());
+            }
+            timed("100000 entry",() -> assertEquals(hits.get(0).spelling(),repository.entry(hits.get(0).entryId()).spelling()));
+            measurePss("100000 after_articles");
+        } finally {
+            repository.close();
+            clearScratchDirectory(root);
+        }
+    }
+
     @Test public void roomPagesTenThousandSavesAndOneHundredCollections() {
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
         String name = "scale-" + UUID.randomUUID() + ".sqlite";
@@ -72,6 +118,9 @@ public class RuntimeScaleTest {
             }
             timed("room_saved_last",() -> assertEquals(50,library.savedPage(50,9950).size()));
             timed("room_collection",() -> assertEquals(50,library.collectionPage(collection,50,50).size()));
+            String pattern = FoundationViewModel.savedPattern("fixture99");
+            timed("room_filtered_count",() -> assertEquals(111,library.filteredSavedCount(false,pattern)));
+            timed("room_filtered_page",() -> assertEquals(50,library.filteredSavedPage(false,pattern,true,50,50).size()));
             long savedId = starts.get(0).id;
             assertEquals(1,library.edit(savedId,"custom answer","note"));
             for (boolean reverse : new boolean[]{false,true}) {
@@ -141,32 +190,44 @@ public class RuntimeScaleTest {
                     timed(label+" broad",() -> assertEquals(50,repository.search("artificial-",false).size()));
                     timed(label+" reverse",() -> assertEquals(50,repository.search("artificial-answer-",true).size()));
                     timed(label+" entry",() -> assertEquals("artificial-scale-000001",repository.entry(id).spelling()));
-                    Debug.MemoryInfo memory = new Debug.MemoryInfo();
-                    Debug.getMemoryInfo(memory);
-                    Log.i(TAG,label+" process_pss_kib="+memory.getTotalPss());
+                    measurePss(label);
                 } finally {
                     repository.close();
-                    if (root.exists()) {
-                        try (var paths = Files.walk(root.toPath())) {
-                            for (var path : paths.sorted(Comparator.reverseOrder()).collect(Collectors.toList())) {
-                                Files.delete(path);
-                            }
-                        }
-                    }
+                    clearScratchDirectory(root);
                 }
             }
         }
     }
 
     private static void timed(String label,Runnable action) {
-        long[] times = new long[REPEATS];
-        for (int i = 0; i < REPEATS; i++) {
+        timed(label,REPEATS,action);
+    }
+
+    private static void timed(String label,int repeats,Runnable action) {
+        long[] times = new long[repeats];
+        for (int i = 0; i < repeats; i++) {
             long start = SystemClock.elapsedRealtimeNanos();
             action.run();
             times[i] = SystemClock.elapsedRealtimeNanos()-start;
         }
         Arrays.sort(times);
-        Log.i(TAG,label+" n="+REPEATS+" median_ms="+times[REPEATS/2]/1_000_000.0
-                +" p95_ms="+times[(REPEATS*95-1)/100]/1_000_000.0);
+        Log.i(TAG,label+" n="+repeats+" median_ms="+times[repeats/2]/1_000_000.0
+                +" p95_ms="+times[(repeats*95-1)/100]/1_000_000.0
+                +" min_ms="+times[0]/1_000_000.0+" max_ms="+times[repeats-1]/1_000_000.0);
+    }
+
+    private static void measurePss(String label) {
+        Debug.MemoryInfo memory = new Debug.MemoryInfo();
+        Debug.getMemoryInfo(memory);
+        Log.i(TAG,label+" process_pss_kib="+memory.getTotalPss());
+    }
+
+    private static void clearScratchDirectory(File root) throws Exception {
+        if (!root.exists()) return;
+        try (var paths = Files.walk(root.toPath())) {
+            for (var path : paths.sorted(Comparator.reverseOrder()).collect(Collectors.toList())) {
+                Files.delete(path);
+            }
+        }
     }
 }

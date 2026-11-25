@@ -55,6 +55,9 @@ android {
     }
     sourceSets.getByName("debug").assets.srcDir(rootProject.file("research/data/processed/android-debug-assets"))
     sourceSets.getByName("androidTest").assets.srcDir(rootProject.file("research/data/processed/android-test-assets"))
+    if (isolatedRuntimeCheck && providers.gradleProperty("lexiflow.capacityFixture").orNull == "true") {
+        sourceSets.getByName("androidTest").assets.srcDir(rootProject.file(".gradle/benchmark-capacity-assets"))
+    }
     if (releaseDictionary != null) {
         sourceSets.getByName("release").assets.srcDir(generatedReleaseAssets.get().asFile)
     }

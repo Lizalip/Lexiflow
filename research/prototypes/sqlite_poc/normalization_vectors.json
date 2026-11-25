@@ -1,6 +1,9 @@
 {
   "version": "nfc-casefold-nfc-python-whitespace-v1",
+  "invalid_codepoints": [0, 55296, 56320],
   "vectors": [
+    {"input": "\ud801\udc00 \ud83d\ude00", "expected": "\ud801\udc28 \ud83d\ude00"},
+    {"input": " A\u00a0B\u2003C\u001c", "expected": "a b c"},
     {
       "input": "  XLEX  TAIL\t",
       "expected": "xlex tail"

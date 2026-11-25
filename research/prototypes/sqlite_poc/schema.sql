@@ -65,6 +65,7 @@ CREATE TABLE form (
     evidence_id INTEGER NOT NULL UNIQUE REFERENCES evidence(id)
 );
 CREATE INDEX form_entry ON form(entry_id);
+CREATE INDEX form_search ON form(search_key,entry_id);
 CREATE TABLE issue (
     id INTEGER PRIMARY KEY, release_id INTEGER NOT NULL REFERENCES release(id),
     locator TEXT NOT NULL, code TEXT NOT NULL, severity TEXT NOT NULL CHECK(severity IN ('review','rejected'))

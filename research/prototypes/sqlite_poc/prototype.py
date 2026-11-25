@@ -52,6 +52,8 @@ def _query(direction: str, text: str, limit: int, exact: bool, release_safe: boo
         raise ValueError('direction must be en-ru or ru-en')
     if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 1000:
         raise ValueError('limit must be 1..1000')
+    if isinstance(text, str) and len(text) > 256:
+        raise ValueError('query exceeds 256 characters')
     key = normalize(text)
     if not key:
         return '', ()
@@ -83,10 +85,22 @@ def _query(direction: str, text: str, limit: int, exact: bool, release_safe: boo
         end = prefix_end(key)
         if end is not None:
             where += f' AND {col}<?'; params.append(end)
-    # Dedupe equivalent matches for the same sense, while keeping distinct senses.
-    sql = f'''SELECT DISTINCT * FROM ({select} WHERE {where})
-        ORDER BY (matched_key=?) DESC, matched_key COLLATE BINARY, id, position, sense_id, matched_translation LIMIT ?'''
-    params.extend([key, limit])
+    hits = f'{select} WHERE {where}'
+    if forward:
+        form_select = select.replace('e.search_key AS matched_key', 'f.search_key AS matched_key')
+        form_select = form_select.replace('FROM entry e', 'FROM form f CROSS JOIN entry e ON e.id=f.entry_id')
+        form_select += ' JOIN evidence fe ON fe.id=f.evidence_id'
+        form_rights = "fe.rights='cleared'" if release_safe else "fe.rights!='excluded'"
+        hits += f" UNION ALL {form_select} WHERE {where.replace('e.search_key','f.search_key')} AND {form_rights}"
+        params.extend(params[:])
+    sql = f'''WITH hits AS ({hits}), ranked AS (
+        SELECT *, row_number() OVER (PARTITION BY id,sense_id
+            ORDER BY (matched_key=?) DESC, matched_key COLLATE BINARY, matched_translation COLLATE BINARY) AS rank
+        FROM hits
+    ) SELECT id, spelling, pos, sense_id, position, matched_translation, rights, matched_key
+        FROM ranked WHERE rank=1
+        ORDER BY (matched_key=?) DESC, matched_key COLLATE BINARY, id, position, sense_id LIMIT ?'''
+    params.extend([key, key, limit])
     return sql, tuple(params)
 
 

@@ -29,3 +29,26 @@
 2. Передать отдельные документированные решения через `release_package.py rights`. Назначить устойчивые UUID через `bind` с сохранением существующего реестра.
 3. Выполнить `release_package.py preflight STAGING SELECTION --registry REGISTRY`. `SELECTION` содержит только четыре исходных ключа в каждой строке JSONL. Проверить `ready == total`. Диагностика не меняет staging. Затем сверить счётчики `readiness`. Они учитывают одобренные переводы по всей копии staging, поэтому для ограниченного пилота применять решения только для согласованной выборки.
 4. Выполнить `release_package.py export STAGING REGISTRY NEW_PACKAGE CORPUS_VERSION --schema-version 2 --compact`, затем `validate NEW_PACKAGE`. Сверить размеры двух файлов, количество статей и SHA-256 манифеста перед подготовкой APK. Новый каталог создаётся экспортёром. [Конвейер](DICTIONARY_RELEASE_PIPELINE.md) · [Контракт пакета](DICTIONARY_PACKAGE_CONTRACT.md)
+
+## Первая очередь и запуск
+
+В `research/data/review/autonomous-stage1-final/` строки `first-review.csv` и `first-review-keys.jsonl` совпадают по всем четырём ключам, 40/40. JSONL можно передать непосредственно в preflight. Для меньшего пилота сохраните выбранные строки ключей в новый JSONL. Редакторские решения ссылаются на те же ключи. Файлы решений о правах, контексте и реестре UUID формируются отдельно. В проверенном снимке preflight вернул 0/40, этапы изменения staging и реального экспорта ждут решений.
+
+После получения явных решений подготовьте новую копию staging через SQLite backup. Используйте существующий реестр для повторного выпуска. Следующий порядок подходит для локальных файлов в `research/data/review/` и `research/data/processed/`. Каждый шаг выполняется после успешного предыдущего.
+
+```powershell
+python research/prototypes/sqlite_poc/review_queue.py validate $staging $editorDecisions
+python research/prototypes/sqlite_poc/review_queue.py apply $staging $editorDecisions
+python research/prototypes/sqlite_poc/release_package.py rights $staging $rightsDecisions
+python research/prototypes/sqlite_poc/release_package.py bind $registry $bindings
+# Выполнить только для утверждённых связей источника.
+python research/prototypes/sqlite_poc/release_package.py context $staging $contextDecisions
+$preflight = python research/prototypes/sqlite_poc/release_package.py preflight $staging $selection --registry $registry | ConvertFrom-Json
+if ($LASTEXITCODE -or !$preflight.total -or $preflight.ready -ne $preflight.total) { throw 'Есть недостающие решения' }
+$readiness = python research/prototypes/sqlite_poc/release_package.py readiness $staging --registry $registry | ConvertFrom-Json
+if ($LASTEXITCODE -or $readiness.with_identity -ne $preflight.total) { throw 'Объём допуска расходится с выборкой' }
+python research/prototypes/sqlite_poc/release_package.py export $staging $registry $package $version --schema-version 2 --compact
+python research/prototypes/sqlite_poc/release_package.py validate $package
+```
+
+После успешной проверки пакета зафиксируйте утверждённый SHA его манифеста и передайте путь и SHA в `lexiflow.releaseDictionary` и `lexiflow.approvedManifestSha256` при `assembleRelease`. Процедура подписи приложения остаётся отдельной операцией. [Параметры сборки](DICTIONARY_PACKAGE_CONTRACT.md)

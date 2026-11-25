@@ -57,6 +57,13 @@ CREATE INDEX form_parent ON form(entry_id,id);
 CREATE INDEX example_parent ON example(sense_id,id);
 CREATE INDEX example_translation_parent ON example_translation(example_id,id);
 """
+DISTRIBUTION_BILINGUAL = DISTRIBUTION_V2 + """
+PRAGMA user_version=3;
+ALTER TABLE entry ADD COLUMN language TEXT NOT NULL DEFAULT 'en' CHECK(language IN ('en','ru'));
+ALTER TABLE translation ADD COLUMN language TEXT NOT NULL DEFAULT 'ru' CHECK(language IN ('en','ru'));
+CREATE INDEX entry_language_search ON entry(language,search_key,id);
+CREATE INDEX translation_language_search ON translation(language,search_key,sense_id);
+"""
 STAGING_METADATA = f"""
 CREATE TABLE IF NOT EXISTS lexical_metadata(
     {METADATA_COLUMNS} evidence_id INTEGER NOT NULL UNIQUE REFERENCES evidence(id), {METADATA_CHECK}
@@ -76,7 +83,7 @@ def compact_attributions(records):
     return [dict(zip(POLICY_FIELDS,key)) for key in policies], items
 
 
-def expand_attributions(policies, items):
+def expand_attributions(policies, items, modifications=None):
     if not isinstance(policies,list) or not isinstance(items,dict) or not policies:
         raise ValueError('invalid compact attribution')
     keys = set()
@@ -87,18 +94,32 @@ def expand_attributions(policies, items):
         keys.add(tuple(policy[field] for field in POLICY_FIELDS))
     if len(keys) != len(policies):
         raise ValueError('duplicate compact attribution policy')
+    if modifications is not None and (not isinstance(modifications,list) or not modifications
+            or any(not isinstance(text,str) or not text.strip() for text in modifications)
+            or len(set(modifications)) != len(modifications)):
+        raise ValueError('invalid modification table')
     records = {}
     used = set()
+    used_modifications = set()
     for ref, item in items.items():
         if (not isinstance(item,list) or len(item) != 3 or type(item[0]) is not int
                 or not 0 <= item[0] < len(policies)
-                or any(not isinstance(value,str) for value in item[1:])):
+                or not isinstance(item[1],str)):
             raise ValueError('invalid compact attribution link')
         index, locator, modification = item
+        if modifications is not None:
+            if type(modification) is not int or not 0 <= modification < len(modifications):
+                raise ValueError('unknown modification reference')
+            used_modifications.add(modification)
+            modification = modifications[modification]
+        elif not isinstance(modification,str):
+            raise ValueError('invalid compact attribution link')
         used.add(index)
         records[ref] = dict(policies[index],locator=locator,modification=modification)
     if len(used) != len(policies):
         raise ValueError('unused compact attribution policy')
+    if modifications is not None and len(used_modifications) != len(modifications):
+        raise ValueError('unused modification reference')
     return records
 
 
@@ -327,12 +348,12 @@ def export_package(src, registry, package, corpus_version, *, version=1, compact
 
 
 def write_package(src, package, corpus_version, version, compact, populate, policy=None, entry_notes=None,
-                  observe=None):
+                  observe=None, shared_modifications=False):
     schema, table_names = package_schema(version)
     package.mkdir()
     database, manifest = package/'dictionary.sqlite', package/'manifest.json'
     try:
-        with closing(sqlite3.connect(database)) as dest:
+        with closing(sqlite3.connect(database,uri=True)) as dest:
             dest.execute('PRAGMA foreign_keys=ON')
             dest.executescript(schema)
             with dest:
@@ -355,6 +376,12 @@ def write_package(src, package, corpus_version, version, compact, populate, poli
             policies, links = compact_attributions(attributions)
             result.update(package_format=COMPACT_FORMAT,policies=policies,attributions=links)
             del attributions
+            if shared_modifications:
+                modifications = sorted({row[2] for row in links.values()})
+                indices = {value:index for index,value in enumerate(modifications)}
+                for row in links.values():
+                    row[2] = indices[row[2]]
+                result.update(package_format=3,modifications=modifications)
         with manifest.open('w',encoding='utf-8',newline='\n' if compact else None) as stream:
             if compact:
                 json.dump(result,stream,ensure_ascii=True,sort_keys=True,separators=(',',':'))
@@ -376,9 +403,11 @@ def schema_objects(conn):
 
 
 def package_schema(version):
-    if type(version) is not int or version not in (1,2):
+    if type(version) is not int or version not in (1,2,3):
         raise ValueError('unsupported schema version')
-    return (DISTRIBUTION,TABLES) if version == 1 else (DISTRIBUTION_V2,(*TABLES,'lexical_metadata'))
+    if version == 1:
+        return DISTRIBUTION,TABLES
+    return (DISTRIBUTION_V2 if version==2 else DISTRIBUTION_BILINGUAL),(*TABLES,'lexical_metadata')
 
 
 def read_manifest(path):
@@ -405,7 +434,7 @@ def validate_package(package):
     version = data.get('schema_version')
     schema, table_names = package_schema(version)
     package_format = data.get('package_format')
-    if (type(package_format) is not int or package_format not in (FORMAT,COMPACT_FORMAT)
+    if (type(package_format) is not int or package_format not in (FORMAT,COMPACT_FORMAT,3)
             or data.get('normalization') != NORMALIZATION_VERSION
             or data.get('language_pairs') != ['en-ru','ru-en']):
         raise ValueError('unsupported dictionary package')
@@ -415,8 +444,13 @@ def validate_package(package):
     if checksum(database) != data.get('database_sha256'):
         raise ValueError('database checksum mismatch')
     attrs = data.get('attributions')
-    if package_format == COMPACT_FORMAT:
-        attrs = expand_attributions(data.get('policies'),attrs)
+    if package_format == 3:
+        if data.get('modifications') is None or not data['corpus_version'].casefold().startswith('research-'):
+            raise ValueError('format 3 requires research and a modification table')
+    elif 'modifications' in data:
+        raise ValueError('unexpected modification table')
+    if package_format in (COMPACT_FORMAT,3):
+        attrs = expand_attributions(data.get('policies'),attrs,data.get('modifications'))
     if not isinstance(attrs,dict) or not attrs:
         raise ValueError('missing attribution')
     for ref, record in attrs.items():
@@ -429,10 +463,13 @@ def validate_package(package):
     marked = [r['modification'].startswith(RESEARCH_POLICY+':') for r in attrs.values()]
     research = data['corpus_version'].casefold().startswith('research-')
     if research:
-        if data.get('distribution_policy') != RESEARCH_POLICY or not all(marked) or version != 2 or package_format != COMPACT_FORMAT:
+        if (data.get('distribution_policy') != RESEARCH_POLICY or not all(marked)
+                or version not in (2,3) or package_format not in (COMPACT_FORMAT,3)):
             raise ValueError('inconsistent research package markers')
     elif 'distribution_policy' in data or 'source_entry_notes' in data or any(marked):
         raise ValueError('inconsistent research package markers')
+    if version == 3 and (not research or package_format!=3):
+        raise ValueError('bilingual schema requires research format 3')
     sources = sorted({(r['source'],r['snapshot'],r['source_url']) for r in attrs.values()})
     if data.get('sources') != [list(row) for row in sources]:
         raise ValueError('inconsistent source list')
@@ -453,6 +490,10 @@ def validate_package(package):
             raise ValueError('entry has no eligible sense')
         if conn.execute('SELECT 1 FROM sense s WHERE NOT EXISTS (SELECT 1 FROM translation t WHERE t.sense_id=s.id)').fetchone():
             raise ValueError('sense has no eligible translation')
+        if version == 3 and (conn.execute("""SELECT 1 FROM translation t JOIN sense s ON s.id=t.sense_id
+                JOIN entry e ON e.id=s.entry_id WHERE t.language=e.language LIMIT 1""").fetchone()
+                or conn.execute('SELECT count(DISTINCT language) FROM entry').fetchone()[0]!=2):
+            raise ValueError('invalid bilingual article direction')
         for table in table_names:
             if any(ref not in attrs for ref, in conn.execute(f'SELECT DISTINCT attribution_id FROM {table}')):
                 raise ValueError('unresolved attribution')

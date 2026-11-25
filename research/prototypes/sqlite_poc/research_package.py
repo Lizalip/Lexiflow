@@ -9,7 +9,7 @@ from time import perf_counter
 from uuid import NAMESPACE_URL, uuid5
 
 from candidate_rank import subtlex_frequency
-from corpus_enrichment import LICENSE, SOURCE, TERMS, URL
+from corpus_enrichment import LICENSE, RUS_ENG_SHA, SOURCE, TERMS, URL
 from prototype import integrity, normalize
 from release_package import RESEARCH_POLICY, checksum, connect, validate_package, write_package
 from sense_context import direct_child
@@ -17,6 +17,8 @@ from sense_context import direct_child
 SNAPSHOT = 'f3dadcc29d7df6e77edb13b98a2ba2c3fac002852eddd8b557637f0b13d39c39'
 FREQUENCY_SNAPSHOT = '67e595da1b399d2a21e25a1466a8d9f242f21a219c6bbbd3e089c4779ad83856'
 VERSION = '2025.11.23'
+DIRECT_URL = f'https://download.freedict.org/dictionaries/rus-eng/{VERSION}/'
+SOURCE_BY_LANGUAGE = {'en':(SNAPSHOT,URL),'ru':(RUS_ENG_SHA,DIRECT_URL)}
 DATA = Path(__file__).resolve().parents[2]/'data'
 LETTER_RU = re.compile('[А-Яа-яЁё]')
 WORD_EN = re.compile(r"[A-Za-z][A-Za-z]*(?:[ ’'-][A-Za-z]+)*\Z")
@@ -157,7 +159,7 @@ def populate(src,dest,groups,keys,release_id,entry_notes):
     return attrs,{}
 
 
-def build(src, frequency, package, size, observe=None):
+def build(src, frequency, package, size, observe=None, shared_modifications=False):
     started = perf_counter()
     release_id = verified_release(src)
     groups,reasons = screen(src.execute(CORE,(release_id,)*3))
@@ -166,7 +168,7 @@ def build(src, frequency, package, size, observe=None):
     notes = {}
     result = write_package(src,package,name,2,True,
                            lambda dest: populate(src,dest,groups,keys,release_id,notes),RESEARCH_POLICY,notes,
-                           observe=observe)
+                           observe=observe,shared_modifications=shared_modifications)
     return dict(spellings=len(keys),eligible_spellings=len(groups),reserved_expressions=expressions,
                 filtered_translation_rows=dict(reasons),counts=result['counts'],
                 entry_definition_notes=sum(map(len,notes.values())),entries_with_definition_notes=len(notes),
@@ -180,10 +182,18 @@ def validate_research_pair(package):
     if package.is_symlink() or any((package/name).is_symlink() for name in ('manifest.json','dictionary.sqlite')):
         raise ValueError('research package must be a local file pair')
     result = validate_package(package)
-    if (result.get('distribution_policy') != RESEARCH_POLICY or result['sources'] != [[SOURCE,SNAPSHOT,URL]]
+    bilingual = result['schema_version']==3
+    expected = sorted([[SOURCE,snapshot,url] for snapshot,url in SOURCE_BY_LANGUAGE.values()]) if bilingual else [[SOURCE,SNAPSHOT,URL]]
+    if (result.get('distribution_policy') != RESEARCH_POLICY or result['sources'] != expected
             or any(row.get('license_id') != LICENSE or row.get('terms_url') != TERMS for row in result['policies'])
             or result['counts']['example'] or result['counts']['example_translation'] or 'sense_context' in result):
         raise ValueError('package does not match the documented research source policy')
+    if bilingual:
+        with connect(package/'dictionary.sqlite','ro') as db:
+            for language,ref in db.execute('SELECT DISTINCT language,attribution_id FROM entry'):
+                policy = result['policies'][result['attributions'][ref][0]]
+                if (policy['snapshot'],policy['source_url']) != SOURCE_BY_LANGUAGE[language]:
+                    raise ValueError('bilingual source does not own article language')
     return result
 
 
@@ -196,6 +206,7 @@ def main():
     export.add_argument('frequency',type=Path)
     export.add_argument('output',type=Path)
     export.add_argument('--size',choices=('5000','10000','20000','30000','all'),default='5000')
+    export.add_argument('--shared-modifications',action='store_true')
     commands.add_parser('validate').add_argument('package',type=Path)
     args = parser.parse_args()
     processed = (DATA/'processed').resolve()
@@ -213,7 +224,8 @@ def main():
     with connect(args.staging,'ro') as src:
         src.execute('BEGIN')
         size = None if args.size == 'all' else int(args.size)
-        print(json.dumps(build(src,subtlex_frequency(args.frequency),args.output,size),indent=2))
+        print(json.dumps(build(src,subtlex_frequency(args.frequency),args.output,size,
+                               shared_modifications=args.shared_modifications),indent=2))
 
 
 if __name__ == '__main__':

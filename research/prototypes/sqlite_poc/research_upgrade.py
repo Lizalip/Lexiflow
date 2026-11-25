@@ -20,8 +20,13 @@ def compare(before, after):
     late = validate_research_pair(after)
     if early['sources'] != late['sources'] or early['policies'] != late['policies']:
         raise ValueError('source snapshot or policy changed')
-    for key, value in early['attributions'].items():
-        if late['attributions'].get(key) != value:
+    def decoded(manifest, key):
+        row = manifest['attributions'].get(key)
+        if row is not None and manifest['package_format'] == 3:
+            return [row[0],row[1],manifest['modifications'][row[2]]]
+        return row
+    for key in early['attributions']:
+        if decoded(late,key) != decoded(early,key):
             raise ValueError('existing attribution changed')
     early_notes = early.get('source_entry_notes',{}).get('entries',{})
     late_notes = late.get('source_entry_notes',{}).get('entries',{})

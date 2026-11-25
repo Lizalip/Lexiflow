@@ -8,7 +8,7 @@ from tempfile import TemporaryDirectory
 from corpus_enrichment import SOURCE
 from prepare_release_asset import prepare
 from prototype import create_database
-from release_package import checksum, export_package, validate_package
+from release_package import checksum, expand_attributions, export_package, validate_package
 from research_package import SNAPSHOT, VERSION, build, validate_research_pair
 
 
@@ -40,6 +40,33 @@ class ResearchPackageTest(unittest.TestCase):
             self.assertEqual(validate_research_pair(path)['counts']['sense'],2)
             manifest = path/'manifest.json'
             record = json.loads(manifest.read_text(encoding='utf-8'))
+            pooled_path = root/'pooled'
+            build(src,{'examplar':1},pooled_path,1,shared_modifications=True)
+            pooled = validate_research_pair(pooled_path)
+            self.assertEqual(pooled['package_format'],3)
+            self.assertEqual(pooled['database_sha256'],record['database_sha256'])
+            self.assertEqual(expand_attributions(record['policies'],record['attributions']),
+                expand_attributions(pooled['policies'],pooled['attributions'],pooled['modifications']))
+            pooled_file = pooled_path/'manifest.json'
+            with self.assertRaisesRegex(ValueError,'research content'):
+                prepare(pooled_path,root/'assets-pooled',checksum(pooled_file))
+            first = next(iter(pooled['attributions']))
+            for changes,error in (
+                    ({'modifications':None},'requires research'),
+                    ({'modifications':[]},'invalid modification table'),
+                    ({'modifications':pooled['modifications']*2},'invalid modification table'),
+                    ({'modifications':['research-local-v1: tampered']},'invalid attribution'),
+                    ({'attributions':{**pooled['attributions'],first:[0,'entry/0',42]}},'unknown modification'),
+                    ({'policies':[{**pooled['policies'][0],'attribution':'tampered'}]},'invalid attribution'),
+                    ({'package_format':4},'unsupported dictionary package')):
+                pooled_file.write_text(json.dumps({**pooled,**changes}),encoding='utf-8')
+                with self.assertRaisesRegex(ValueError,error):
+                    validate_package(pooled_path)
+            rendered = json.dumps(pooled)
+            pooled_file.write_text(rendered.replace('"modifications":','"modifications": [], "modifications":',1),
+                                   encoding='utf-8')
+            with self.assertRaisesRegex(ValueError,'duplicate manifest'):
+                validate_package(pooled_path)
             notes, = record['source_entry_notes']['entries'].values()
             self.assertEqual(len(notes),1)
             with closing(sqlite3.connect(path/'dictionary.sqlite')) as package:

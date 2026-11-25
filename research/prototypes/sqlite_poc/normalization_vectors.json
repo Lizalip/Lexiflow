@@ -1,0 +1,65 @@
+{
+  "version": "nfc-casefold-nfc-python-whitespace-v1",
+  "vectors": [
+    {
+      "input": "  XLEX  TAIL\t",
+      "expected": "xlex tail"
+    },
+    {
+      "input": "ЁЖ",
+      "expected": "ёж"
+    },
+    {
+      "input": "ЁЖ",
+      "expected": "ёж"
+    },
+    {
+      "input": "ЕЖ",
+      "expected": "еж"
+    },
+    {
+      "input": "Straße",
+      "expected": "strasse"
+    },
+    {
+      "input": "İ",
+      "expected": "i̇"
+    },
+    {
+      "input": "CAFÉ",
+      "expected": "café"
+    },
+    {
+      "input": "CAFÉ",
+      "expected": "café"
+    },
+    {
+      "input": "a b c",
+      "expected": "a b c"
+    },
+    {
+      "input": "IT'S",
+      "expected": "it's"
+    },
+    {
+      "input": "IT’S",
+      "expected": "it’s"
+    },
+    {
+      "input": "A-B",
+      "expected": "a-b"
+    },
+    {
+      "input": "A–B",
+      "expected": "a–b"
+    },
+    {
+      "input": "Σςσ",
+      "expected": "σσσ"
+    },
+    {
+      "input": "  ",
+      "expected": ""
+    }
+  ]
+}

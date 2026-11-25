@@ -13,6 +13,8 @@ __pycache__/
 research/data/raw/
 research/data/processed/
 research/data/interim/
+/research/data/review/
+/LexiFlow_Dictionary_Foundation_Transfer.zip
 
 # Generated databases
 *.db

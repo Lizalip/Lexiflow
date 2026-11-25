@@ -3,12 +3,15 @@ package app.lexiflow.ui;
 import android.content.Context;
 import android.database.Cursor;
 import android.database.sqlite.SQLiteDatabase;
-import android.icu.lang.UCharacter;
+import app.lexiflow.data.SearchNormalization;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.test.platform.app.InstrumentationRegistry;
 import java.io.File;
 import java.io.IOException;
-import java.text.Normalizer;
+import java.nio.charset.StandardCharsets;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import org.json.JSONObject;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 
@@ -41,9 +44,9 @@ public class DictionaryReadinessTest {
                     assertEquals(0, c.getCount());
                 }
                 try (Cursor c = db.rawQuery(
-                        "SELECT s.id, row_number() OVER (PARTITION BY e.id ORDER BY s.id) "
+                        "SELECT s.id, min(e.search_key) AS matched "
                         + "FROM entry e JOIN sense s ON s.entry_id=e.id "
-                        + "WHERE e.search_key>=? AND e.search_key<? ORDER BY e.search_key LIMIT 1",
+                        + "WHERE e.search_key>=? AND e.search_key<? GROUP BY s.id ORDER BY matched LIMIT 1",
                         new String[]{"artificial", "artificiam"})) {
                     assertTrue(c.moveToFirst());
                     assertEquals("sense-a", c.getString(0));
@@ -62,22 +65,30 @@ public class DictionaryReadinessTest {
             {"\uD801\uDC00 😀", "\uD801\uDC28 😀"}
         };
         for (String[] vector : vectors) {
-            assertEquals(vector[1], normalize(vector[0]));
+            assertEquals(vector[1], SearchNormalization.normalize(vector[0]));
         }
-        assertThrows(IllegalArgumentException.class, () -> normalize("\uD800"));
-        assertThrows(IllegalArgumentException.class, () -> normalize("\uDC00"));
-        assertThrows(IllegalArgumentException.class, () -> normalize("\u0000"));
+        assertThrows(IllegalArgumentException.class, () -> SearchNormalization.normalize("\uD800"));
+        assertThrows(IllegalArgumentException.class, () -> SearchNormalization.normalize("\uDC00"));
+        assertThrows(IllegalArgumentException.class, () -> SearchNormalization.normalize("\u0000"));
     }
 
-    private static String normalize(String text) {
-        text.codePoints().forEach(cp -> {
-            if (cp == 0 || (cp >= 0xD800 && cp <= 0xDFFF)) {
-                throw new IllegalArgumentException("invalid scalar");
+    @Test public void icuMatchesSharedDebugAssetVectors() throws Exception {
+        var context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        try (var reader = new BufferedReader(new InputStreamReader(
+                context.getAssets().open("dictionary/normalization_vectors.json"),StandardCharsets.UTF_8))) {
+            StringBuilder json = new StringBuilder();
+            for (String line; (line = reader.readLine()) != null;) json.append(line);
+            var data = new JSONObject(json.toString());
+            var vectors = data.getJSONArray("vectors");
+            for (int i = 0; i < vectors.length(); i++) {
+                var item = vectors.getJSONObject(i);
+                assertEquals(item.getString("expected"),SearchNormalization.normalize(item.getString("input")));
             }
-        });
-        String nfc = Normalizer.normalize(text, Normalizer.Form.NFC);
-        String folded = Normalizer.normalize(UCharacter.foldCase(nfc, true), Normalizer.Form.NFC);
-        return folded.replaceAll("[\\x{0009}-\\x{000D}\\x{001C}-\\x{0020}\\x{0085}\\x{00A0}"
-                + "\\x{1680}\\x{2000}-\\x{200A}\\x{2028}\\x{2029}\\x{202F}\\x{205F}\\x{3000}]+", " ").trim();
+            var invalid = data.getJSONArray("invalid_codepoints");
+            for (int i = 0; i < invalid.length(); i++) {
+                String value = String.valueOf((char) invalid.getInt(i));
+                assertThrows(IllegalArgumentException.class,() -> SearchNormalization.normalize(value));
+            }
+        }
     }
 }

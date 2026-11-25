@@ -16,9 +16,13 @@
         style="@style/Widget.Material3.TextInputLayout.OutlinedBox">
         <com.google.android.material.textfield.TextInputEditText
             android:id="@+id/query" android:layout_width="match_parent" android:layout_height="wrap_content"
-            android:maxLength="512" android:maxLines="1" android:inputType="text" android:imeOptions="actionDone"
+            android:maxLength="256" android:maxLines="1" android:inputType="text" android:imeOptions="actionDone"
             android:importantForAutofill="no" android:saveEnabled="false" />
     </com.google.android.material.textfield.TextInputLayout>
+
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/direction" android:layout_width="wrap_content" android:layout_height="wrap_content"
+        style="@style/Widget.Material3.Button.TextButton" />
 
     <com.google.android.material.card.MaterialCardView
         android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="24dp"
@@ -37,4 +41,7 @@
     <com.google.android.material.button.MaterialButton
         android:id="@+id/action" android:layout_width="wrap_content" android:layout_height="wrap_content"
         android:layout_marginTop="16dp" style="@style/Widget.Material3.Button.TonalButton" />
+
+    <LinearLayout android:id="@+id/results" android:orientation="vertical"
+        android:layout_width="match_parent" android:layout_height="wrap_content" />
 </LinearLayout>

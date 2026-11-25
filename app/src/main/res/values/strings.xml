@@ -29,4 +29,56 @@
     <string name="open_progress">Посмотреть прогресс</string>
     <string name="back">Назад</string>
     <string name="no_installed_dictionary">Словарная база не подключена</string>
+    <string name="forward_search">EN → RU</string>
+    <string name="reverse_search">RU → EN</string>
+    <string name="dictionary_loading">Загрузка словаря…</string>
+    <string name="dictionary_incompatible">Версия словаря несовместима</string>
+    <string name="dictionary_corrupted">Словарный пакет повреждён</string>
+    <string name="dictionary_error">Не удалось прочитать словарь</string>
+    <string name="dictionary_prompt">Введите запрос</string>
+    <string name="dictionary_no_hits">Совпадений нет</string>
+    <string name="dictionary_hits">Совпадения</string>
+    <string name="dictionary_synthetic">Искусственный набор для проверки приложения</string>
+    <string name="dictionary_synthetic_pos">%1$s\nИскусственный набор для проверки приложения</string>
+    <string name="entry_unavailable">Статья недоступна в текущем пакете</string>
+    <string name="sense_title">Значение %1$d</string>
+    <string name="selected_sense">из результатов поиска</string>
+    <string name="save_entry">Сохранить статью</string>
+    <string name="pronounce_offline">Произнести локальным голосом</string>
+    <string name="pronunciation_error">Установленный голос не смог произнести статью</string>
+    <string name="save_sense">Сохранить значение %1$d</string>
+    <string name="personal_error">Не удалось обновить личный словарь</string>
+    <string name="saved_heading">Сохранённые записи</string>
+    <string name="saved_count">Записей: %1$d</string>
+    <string name="collection_count">Подборок: %1$d</string>
+    <string name="create_collection">Создать подборку</string>
+    <string name="rename_collection">Переименовать подборку</string>
+    <string name="collection_name">Название подборки</string>
+    <string name="collection_duplicate">Это название уже используется</string>
+    <string name="collection_items">Записи в этой подборке</string>
+    <string name="remove_from_collection">Убрать из подборки</string>
+    <string name="create_collection_first">Сначала создайте подборку</string>
+    <string name="open_saved">Открыть статью</string>
+    <string name="custom_translation">Свой перевод</string>
+    <string name="note">Заметка</string>
+    <string name="save">Сохранить</string>
+    <string name="remove">Удалить</string>
+    <string name="remove_saved">Удалить сохранённую запись?</string>
+    <string name="remove_saved_message">Перевод, заметка и членство в подборках будут удалены. История повторений сохранится.</string>
+    <string name="review_prompt">Вспомните ответ и проверьте себя.</string>
+    <string name="reveal">Показать ответ</string>
+    <string name="stats">Сохранённых записей: %1$d\nПодборок: %2$d\nКарточек: %3$d\nГотовы к повторению: %4$d\nПовторений: %5$d\nУспешных: %6$d\nНеуспешных: %7$d</string>
+    <string-array name="saved_actions">
+        <item>@string/open_saved</item>
+        <item>Изменить перевод и заметку</item>
+        <item>Добавить в подборку</item>
+        <item>Создать карточку EN → RU</item>
+        <item>Создать карточку RU → EN</item>
+        <item>@string/remove</item>
+    </string-array>
+    <string-array name="review_ratings">
+        <item>Не знаю</item>
+        <item>Трудно</item>
+        <item>Знаю</item>
+    </string-array>
 </resources>

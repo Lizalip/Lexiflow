@@ -2,6 +2,7 @@
 import argparse
 import hashlib
 import json
+import re
 import sqlite3
 from contextlib import closing
 from pathlib import Path
@@ -15,6 +16,7 @@ from review_queue import IDENTITY, initialize
 
 FORMAT = 1
 COMPACT_FORMAT = 2
+RESEARCH_POLICY = 'research-local-v1'
 DISTRIBUTION = """
 PRAGMA user_version=1;
 CREATE TABLE entry(id TEXT PRIMARY KEY NOT NULL, spelling TEXT NOT NULL, pos TEXT, search_key TEXT NOT NULL, attribution_id TEXT NOT NULL);
@@ -315,12 +317,17 @@ def checksum(path):
 
 
 def export_package(src, registry, package, corpus_version, *, version=1, compact=False):
-    if not isinstance(corpus_version,str) or not corpus_version.strip():
+    if not isinstance(corpus_version,str) or not corpus_version.strip() or corpus_version.casefold().startswith('research-'):
         raise ValueError('corpus version is required')
-    schema, table_names = package_schema(version)
     tables = {name for name, in src.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     if not {'semantic_decision','rights_decision'} <= tables:
         raise ValueError('no eligible entries: review and rights decisions are absent')
+    return write_package(src,package,corpus_version,version,compact,
+                         lambda dest: copy_eligible(src,dest,registry,version))
+
+
+def write_package(src, package, corpus_version, version, compact, populate, policy=None, entry_notes=None):
+    schema, table_names = package_schema(version)
     package.mkdir()
     database, manifest = package/'dictionary.sqlite', package/'manifest.json'
     try:
@@ -328,7 +335,7 @@ def export_package(src, registry, package, corpus_version, *, version=1, compact
             dest.execute('PRAGMA foreign_keys=ON')
             dest.executescript(schema)
             with dest:
-                attributions, context = copy_eligible(src,dest,registry,version)
+                attributions, context = populate(dest)
             integrity(dest)
             counts = {table:dest.execute(f'SELECT count(*) FROM {table}').fetchone()[0] for table in table_names}
         versions = dict(src.execute('SELECT key,value FROM metadata'))
@@ -339,6 +346,10 @@ def export_package(src, registry, package, corpus_version, *, version=1, compact
                       attributions=attributions)
         if context:
             result['sense_context'] = dict(version=1,senses=context)
+        if policy:
+            result['distribution_policy'] = policy
+        if entry_notes:
+            result['source_entry_notes'] = dict(version=1,entries=entry_notes)
         if compact:
             policies, links = compact_attributions(attributions)
             result.update(package_format=COMPACT_FORMAT,policies=policies,attributions=links)
@@ -412,6 +423,13 @@ def validate_package(package):
                 or not all(valid_url(record[k]) for k in ('source_url','terms_url'))
                 or ref != hashlib.sha256(json.dumps(record,sort_keys=True).encode()).hexdigest()):
             raise ValueError('invalid attribution')
+    marked = [r['modification'].startswith(RESEARCH_POLICY+':') for r in attrs.values()]
+    research = data['corpus_version'].casefold().startswith('research-')
+    if research:
+        if data.get('distribution_policy') != RESEARCH_POLICY or not all(marked) or version != 2 or package_format != COMPACT_FORMAT:
+            raise ValueError('inconsistent research package markers')
+    elif 'distribution_policy' in data or 'source_entry_notes' in data or any(marked):
+        raise ValueError('inconsistent research package markers')
     sources = sorted({(r['source'],r['snapshot'],r['source_url']) for r in attrs.values()})
     if data.get('sources') != [list(row) for row in sources]:
         raise ValueError('inconsistent source list')
@@ -446,7 +464,35 @@ def validate_package(package):
             if version != 2:
                 raise ValueError('sense context requires schema 2')
             validate_context(conn,data['sense_context'],attrs)
+        if 'source_entry_notes' in data:
+            validate_entry_notes(conn,data['source_entry_notes'],attrs)
     return data
+
+
+def validate_entry_notes(conn, extension, attrs):
+    if (not isinstance(extension,dict) or set(extension) != {'version','entries'}
+            or type(extension['version']) is not int or extension['version'] != 1
+            or not isinstance(extension['entries'],dict) or not extension['entries']):
+        raise ValueError('invalid source entry note extension')
+    for entry,notes in extension['entries'].items():
+        parent = conn.execute('SELECT attribution_id FROM entry WHERE id=?',(entry,)).fetchone()
+        if not parent or not isinstance(notes,list) or not 1 <= len(notes) <= 3:
+            raise ValueError('invalid source entry note owner')
+        origin = attrs[parent[0]]
+        seen = set()
+        for row in notes:
+            if (not isinstance(row,dict) or set(row) != {'text','definition'} or not isinstance(row['text'],str)
+                    or not row['text'].strip() or len(row['text']) > 1000
+                    or not isinstance(row['definition'],str) or row['definition'] not in attrs
+                    or row['definition'] in seen):
+                raise ValueError('invalid source entry note')
+            definition = attrs[row['definition']]
+            seen.add(row['definition'])
+            if ((origin['source'],origin['snapshot']) != (definition['source'],definition['snapshot'])
+                    or not re.fullmatch(re.escape(origin['locator']) +
+                                        r'/sense/(0|[1-9][0-9]*)/sense/(0|[1-9][0-9]*)/def/(0|[1-9][0-9]*)',
+                                        definition['locator'])):
+                raise ValueError('source entry note provenance mismatch')
 
 
 def connect(path, mode):

@@ -70,6 +70,8 @@ def prepare(source, generated_root, approved_sha256):
         if checksum(candidate/'manifest.json') != approved_sha256:
             raise ValueError('manifest does not match the explicitly approved SHA-256')
         data = validate_package(candidate)
+        if 'distribution_policy' in data:
+            raise ValueError('research content cannot be supplied to a release build')
         attrs = data['attributions']
         if data['package_format'] == 2:
             attrs = expand_attributions(data['policies'],attrs)

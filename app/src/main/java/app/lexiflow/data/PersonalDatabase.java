@@ -75,6 +75,7 @@ public abstract class PersonalDatabase extends RoomDatabase {
         public int intervalDays;
         @NonNull public String spelling = "";
         @NonNull public String answer = "";
+        public boolean sourceAnswer;
     }
 
     @Dao
@@ -108,7 +109,8 @@ public abstract class PersonalDatabase extends RoomDatabase {
         @Insert(onConflict = OnConflictStrategy.IGNORE) public abstract long addCard(Card card);
         @Insert public abstract void addEvent(Event event);
 
-        @Query("SELECT c.id,c.reverse,c.due,c.intervalDays,s.spelling, CASE WHEN s.custom='' THEN s.answer ELSE s.custom END AS answer "
+        @Query("SELECT c.id,c.reverse,c.due,c.intervalDays,s.spelling, CASE WHEN s.custom='' THEN s.answer ELSE s.custom END AS answer, "
+                + "s.custom='' AS sourceAnswer "
                 + "FROM cards c JOIN saved s ON s.id=c.savedId WHERE c.due<=:now ORDER BY c.due,c.id LIMIT 1")
         public abstract Exercise next(long now);
         @Query("SELECT count(*) FROM cards WHERE savedId IS NOT NULL") public abstract int cardCount();

@@ -18,4 +18,12 @@ public class TranslationDisplayTest {
             assertEquals(source,TranslationDisplay.wording(source));
         }
     }
+
+    @Test public void projectsOnlyDictionaryAnswersInResearch() {
+        String source = "[[макет]] [[проверка|проверочного]] [[блок|блока]]";
+        assertEquals("макет проверочного блока",TranslationDisplay.answer(source,true,true));
+        assertEquals(source,TranslationDisplay.answer(source,false,true));
+        assertEquals(source,TranslationDisplay.answer(source,true,false));
+        assertEquals("{{term}} [[слово]]",TranslationDisplay.answer("{{term}} [[слово]]",true,true));
+    }
 }

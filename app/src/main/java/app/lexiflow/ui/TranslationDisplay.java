@@ -14,6 +14,10 @@ final class TranslationDisplay {
 
     private TranslationDisplay() {}
 
+    static String answer(String text,boolean sourceAnswer,boolean research) {
+        return sourceAnswer && research ? wording(text) : text;
+    }
+
     static String wording(String source) {
         if (!source.contains("[[") || source.contains("{{") || source.contains("}}")
                 || source.contains("<") || source.contains(">")) return source;

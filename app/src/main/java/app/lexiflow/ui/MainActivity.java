@@ -438,7 +438,10 @@ public final class MainActivity extends AppCompatActivity {
     }
 
     private String savedLabel(PersonalDatabase.Saved item) {
-        String label = item.spelling + " · " + (item.custom.isEmpty() ? item.answer : item.custom);
+        boolean sourceAnswer = item.custom.isEmpty();
+        String text = sourceAnswer ? item.answer : item.custom;
+        String label = item.spelling + " · " + TranslationDisplay.answer(text,sourceAnswer,
+                LocalDictionaryRepository.isResearchProfile(this));
         return item.note.isEmpty() ? label : label + "\n" + item.note;
     }
 
@@ -589,13 +592,15 @@ public final class MainActivity extends AppCompatActivity {
             }
             return;
         }
-        heading.setText(exercise.reverse ? exercise.answer : exercise.spelling);
+        String answer = TranslationDisplay.answer(exercise.answer,exercise.sourceAnswer,
+                LocalDictionaryRepository.isResearchProfile(this));
+        heading.setText(exercise.reverse ? answer : exercise.spelling);
         if (!model.answerShown(exercise)) {
             body.setText(R.string.review_prompt);
             addAction(rows,getString(R.string.reveal),() -> { model.revealAnswer(exercise); renderPersonal(); });
             return;
         }
-        body.setText(exercise.reverse ? exercise.spelling : exercise.answer);
+        body.setText(exercise.reverse ? exercise.spelling : answer);
         String[] choices = getResources().getStringArray(R.array.review_ratings);
         for (int i = 0; i < choices.length; i++) {
             int rating = i;

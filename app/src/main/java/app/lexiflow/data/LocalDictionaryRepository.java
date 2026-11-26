@@ -32,9 +32,12 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.function.BiConsumer;
 import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 
 /** Called on one background executor. SQLite connections always open read-only. */
 public final class LocalDictionaryRepository implements DictionaryRepository {
+    public enum ActivationStage { IDLE, PREPARING, VERIFYING, ACTIVATING, PREVIOUS_RETAINED }
+
     private static final String[] TABLES = {"entry", "sense", "translation", "form", "example", "example_translation"};
     private static final byte[] URL_NAMESPACE = ByteBuffer.allocate(16)
             .putLong(0x6ba7b8119dad11d1L).putLong(0x80b400c04fd430c8L).array();
@@ -45,6 +48,7 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
     static final long MAX_DATABASE = 256L * 1024 * 1024;
     private final Context context;
     private final BiConsumer<String,Long> startupTiming;
+    private final Consumer<ActivationStage> activationObserver;
     private volatile Status status = Status.MISSING;
     private SQLiteDatabase database;
     private PackageManifest manifest;
@@ -53,12 +57,22 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
     private boolean loadAttempted;
 
     public LocalDictionaryRepository(Context context) {
-        this(context,null);
+        this(context,null,null);
+    }
+
+    public static LocalDictionaryRepository observingActivation(Context context,Consumer<ActivationStage> observer) {
+        return new LocalDictionaryRepository(context,null,observer);
     }
 
     LocalDictionaryRepository(Context context,BiConsumer<String,Long> startupTiming) {
+        this(context,startupTiming,null);
+    }
+
+    private LocalDictionaryRepository(Context context,BiConsumer<String,Long> startupTiming,
+                                      Consumer<ActivationStage> activationObserver) {
         this.context = context.getApplicationContext();
         this.startupTiming = startupTiming;
+        this.activationObserver = activationObserver;
     }
 
     @Override public Status status() { return status; }
@@ -84,6 +98,10 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
         if (startupTiming != null) startupTiming.accept(phase,System.nanoTime()-started);
     }
 
+    private void activationStage(ActivationStage stage) {
+        if (activationObserver != null) activationObserver.accept(stage);
+    }
+
     private void loadLocked() {
         if (database != null || loadAttempted) return;
         loadAttempted = true;
@@ -104,12 +122,17 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
                 status = Status.MISSING;
             }
         } catch (UnsupportedOperationException incompatible) {
-            if (database == null) status = Status.INCOMPATIBLE;
+            activationFailure(Status.INCOMPATIBLE);
         } catch (JSONException | SQLiteException | IllegalArgumentException invalid) {
-            if (database == null) status = Status.CORRUPTED;
+            activationFailure(Status.CORRUPTED);
         } catch (IOException failure) {
-            if (database == null) status = Status.ERROR;
+            activationFailure(Status.ERROR);
         }
+    }
+
+    private void activationFailure(Status failure) {
+        if (database == null) status = failure;
+        else activationStage(ActivationStage.PREVIOUS_RETAINED);
     }
 
     private File openActive(File root) throws IOException, JSONException {
@@ -224,15 +247,18 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
         boolean activated = false;
         boolean pointerAttempted = false;
         try {
+            activationStage(ActivationStage.PREPARING);
             long started = System.nanoTime();
             writeCandidate(json,jsonFile,MAX_MANIFEST);
             timed("manifest_copy",started);
+            activationStage(ActivationStage.VERIFYING);
             var candidate = readFileManifest(jsonFile,null);
             started = System.nanoTime();
             writeCandidate(db,dbFile,MAX_DATABASE);
             timed("sqlite_copy",started);
             candidateDb = openValidated(dbFile,candidate,checkedDatabaseDigest(dbFile),false);
             var state = new DictionaryPackageStore.State(folder.getName(),openFolder == null ? null : openFolder.getName());
+            activationStage(ActivationStage.ACTIVATING);
             started = System.nanoTime();
             pointerAttempted = true;
             DictionaryPackageStore.write(root,state);
@@ -245,6 +271,7 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
                 if (candidateDb != null) candidateDb.close();
                 if (!pointerAttempted) DictionaryPackageStore.removeCandidate(folder);
             }
+            activationStage(ActivationStage.IDLE);
         }
     }
 
@@ -263,6 +290,10 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
     }
 
     private String validation(String manifestDigest,String databaseDigest) {
+        return validationPrefix()+manifestDigest+"\n"+databaseDigest;
+    }
+
+    private String validationPrefix() {
         return "6\n" + (isResearchProfile(context) ? "research" : debug() ? "debug" : "apk") + "\n"
                 + android.os.Build.VERSION.SDK_INT + "\n" + android.os.Build.VERSION.INCREMENTAL + "\n"
                 + android.icu.lang.UCharacter.getUnicodeVersion() + "\n";
@@ -290,10 +321,6 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
             started = System.nanoTime();
             if (!"ok".equals(scalar(opened,"PRAGMA integrity_check"))) throw new SQLiteException("integrity check");
             try (Cursor check = opened.rawQuery("PRAGMA foreign_key_check",null)) {
-        return validationPrefix()+manifestDigest+"\n"+databaseDigest;
-    }
-
-    private String validationPrefix() {
                 if (check.moveToFirst()) throw new SQLiteException("foreign key check");
             }
             timed("sqlite_integrity",started);
@@ -700,7 +727,12 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
 
     @Override public synchronized List<Hit> search(String query, boolean reverse) {
         if (database == null || query.codePointCount(0, query.length()) > 256) return Collections.emptyList();
-        String key = SearchNormalization.normalize(query);
+        String key;
+        try {
+            key = SearchNormalization.normalize(query);
+        } catch (IllegalArgumentException invalidQuery) {
+            return Collections.emptyList();
+        }
         if (key.isEmpty()) return Collections.emptyList();
         boolean bilingual = manifest.schema()==3;
         List<Hit> results = queryHits(DictionarySearch.ranked(key,reverse,bilingual));

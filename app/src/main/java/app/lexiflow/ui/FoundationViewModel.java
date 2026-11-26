@@ -32,6 +32,7 @@ public final class FoundationViewModel extends ViewModel {
     private volatile int request;
     private volatile boolean disposed;
     final MutableLiveData<DictionaryView> dictionaryView = new MutableLiveData<>();
+    final MutableLiveData<LocalDictionaryRepository.ActivationStage> activation = new MutableLiveData<>();
     static final int PERSONAL_PAGE_SIZE = 50;
     record PersonalView(Screen screen,long collection,int page,int rowCount,int savedCount,
                         boolean notesOnly,String savedQuery,boolean alphabetical,
@@ -51,7 +52,14 @@ public final class FoundationViewModel extends ViewModel {
 
     void connect(Context context) {
         if (worker != null) return;
-        dictionary = new LocalDictionaryRepository(context);
+        dictionary = LocalDictionaryRepository.observingActivation(context,stage -> main.post(() -> {
+            if (disposed) return;
+            if (stage == LocalDictionaryRepository.ActivationStage.PREVIOUS_RETAINED) {
+                notice.setValue(R.string.dictionary_previous_retained);
+            } else {
+                activation.setValue(stage);
+            }
+        }));
         personal = Room.databaseBuilder(context.getApplicationContext(),PersonalDatabase.class,"lexiflow-personal.sqlite").build();
         main = new Handler(Looper.getMainLooper());
         worker = Executors.newSingleThreadExecutor();

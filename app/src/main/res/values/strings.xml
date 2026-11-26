@@ -32,6 +32,10 @@
     <string name="forward_search">EN → RU</string>
     <string name="reverse_search">RU → EN</string>
     <string name="dictionary_loading">Загрузка словаря…</string>
+    <string name="dictionary_preparing">Подготавливаем словарный пакет…</string>
+    <string name="dictionary_verifying">Проверяем словарный пакет…</string>
+    <string name="dictionary_activating">Подключаем проверенный словарь…</string>
+    <string name="dictionary_previous_retained">Обновление словаря не удалось. Предыдущий словарь доступен.</string>
     <string name="dictionary_incompatible">Версия словаря несовместима</string>
     <string name="dictionary_corrupted">Словарный пакет повреждён</string>
     <string name="dictionary_error">Не удалось прочитать словарь</string>

@@ -105,6 +105,10 @@ public final class MainActivity extends AppCompatActivity {
             }
             renderDictionary();
         });
+        model.activation.observe(this,stage -> {
+            var view = model.dictionaryView.getValue();
+            if (view != null && view.status() == DictionaryRepository.Status.LOADING) renderDictionary();
+        });
         model.personalView.observe(this, view -> renderPersonal());
         model.personalError.observe(this, error -> {
             if (Boolean.TRUE.equals(error)) {
@@ -183,7 +187,7 @@ public final class MainActivity extends AppCompatActivity {
             heading.setText(switch (state.status()) {
                 case AVAILABLE -> R.string.dictionary_available;
                 case MISSING -> R.string.no_installed_dictionary;
-                case LOADING -> R.string.dictionary_loading;
+                case LOADING -> dictionaryLoadingLabel();
                 case ERROR -> R.string.dictionary_error;
                 case CORRUPTED -> R.string.dictionary_corrupted;
                 case INCOMPATIBLE -> R.string.dictionary_incompatible;
@@ -208,7 +212,7 @@ public final class MainActivity extends AppCompatActivity {
                     ? View.VISIBLE : View.GONE);
         }
         switch (state.status()) {
-            case LOADING -> { heading.setText(R.string.dictionary_loading); body.setText(""); }
+            case LOADING -> { heading.setText(dictionaryLoadingLabel()); body.setText(""); }
             case MISSING -> { }
             case INCOMPATIBLE -> { heading.setText(R.string.dictionary_incompatible); body.setText(""); }
             case CORRUPTED -> { heading.setText(R.string.dictionary_corrupted); body.setText(""); }
@@ -251,6 +255,17 @@ public final class MainActivity extends AppCompatActivity {
                 });
             }
         }
+    }
+
+    private int dictionaryLoadingLabel() {
+        var stage = model.activation.getValue();
+        if (stage == null) return R.string.dictionary_loading;
+        return switch (stage) {
+            case PREPARING -> R.string.dictionary_preparing;
+            case VERIFYING -> R.string.dictionary_verifying;
+            case ACTIVATING -> R.string.dictionary_activating;
+            default -> R.string.dictionary_loading;
+        };
     }
 
     private void renderEntry(LinearLayout rows, TextView heading, TextView body, DictionaryRepository.Entry entry) {

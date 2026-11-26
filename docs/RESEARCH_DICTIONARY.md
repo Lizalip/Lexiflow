@@ -68,6 +68,11 @@ Windows SQL измерен для точного `book`, префикса `bo` �
 
 ## Воспроизведение
 
+Для проверенного Research APK запустите в PowerShell 7
+`./scripts/build-research-candidate.ps1 -Dictionary <каталог-пары> -Python <путь-к-python.exe>`.
+Скрипт использует установленные SDK и JDK, заново записывает APK и оставляет его и отчёт ZIP в игнорируемом каталоге `.gradle/samsung-evidence`.
+Для локального сравнения запустите `python scripts/inspect_research_apk.py <новый.apk> --compare <прежний.apk> --require-equivalent`. Опция `--plain-release` проверяет обычный release и допускает стандартные файлы профиля Android.
+
 Откройте корень проекта в Android Studio. Для исследовательского APK используйте задачу `:app:assembleDebug` с `-Plexiflow.research=true` в Gradle Run Configuration либо в терминале Studio. В списке вариантов используется `debug`, отдельного варианта `researchDebug` нет. Передайте существующий Python через `-Plexiflow.python`. Из корня проекта на Windows выполните команды со своим путём к Python.
 
 ```powershell

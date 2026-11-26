@@ -379,6 +379,41 @@ public class RealResearchFlowTest {
         }
     }
 
+    @Test public void opensNewMarathonExamplesAndRetainsCefr() throws Exception {
+        var target = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        var args = InstrumentationRegistry.getArguments();
+        assumeTrue("app.lexiflow.researchcheck".equals(target.getPackageName())
+                && "true".equals(args.getString("lexiflowMarathonUsage")));
+        try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
+            awaitDictionary(scenario,state -> state.status()!=DictionaryRepository.Status.LOADING,"marathon corpus",120);
+            assertEquals(DictionaryRepository.Status.AVAILABLE,view(scenario).status());
+            assertEquals(args.getString("lexiflowCorpus"),view(scenario).corpusVersion());
+            query("slowly");
+            awaitDictionary(scenario,state -> state.hits().stream().anyMatch(row ->
+                    "slowly".equals(row.spelling()) && "adv".equals(row.pos())),"new example owner");
+            var hit = view(scenario).hits().stream().filter(row -> "slowly".equals(row.spelling())
+                    && "adv".equals(row.pos())).findFirst().orElseThrow();
+            onView(withText("slowly · adv · "+target.getString(R.string.sense_title,hit.position())
+                    +"\n"+TranslationDisplay.wording(hit.translation()))).perform(scrollTo(),click());
+            awaitDictionary(scenario,state -> state.entry()!=null,"new example article");
+            var example = view(scenario).entry().metadata().stream()
+                    .filter(row -> "usage_example".equals(row.kind())).findFirst().orElseThrow();
+            assertEquals(3,example.attribution().split("tatoeba.org/en/sentences/show/",-1).length);
+            onView(withText(startsWith(target.getString(R.string.source_usage_example)+" · "+example.value())))
+                    .perform(scrollTo()).check(matches(isDisplayed()));
+        }
+        var repository = new LocalDictionaryRepository(target);
+        try {
+            repository.load();
+            var book = repository.search("book",false).stream().filter(row -> "book".equals(row.spelling())
+                    && "n".equals(row.pos())).findFirst().orElseThrow();
+            assertTrue(repository.entry(book.entryId()).metadata().stream().anyMatch(row ->
+                    "cefr".equals(row.kind()) && "A1".equals(row.value()) && row.attribution().contains("CEFR-J")));
+        } finally {
+            repository.close();
+        }
+    }
+
     @Test public void readsBothLanguagesAfterRestartOrRollback() throws Exception {
         var args = InstrumentationRegistry.getArguments();
         String word = args.getString("lexiflowDirectWord");

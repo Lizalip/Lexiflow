@@ -10,6 +10,7 @@ param(
     [string]$DirectWord,
     [string]$AddedWord,
     [switch]$LexicalScale,
+    [switch]$MarathonUsage,
     [switch]$ProfileOnly,
     [ValidateSet('10000','20000')][string]$RussianSize = '20000'
 )
@@ -25,9 +26,10 @@ if ($Advanced -like 'bilingual*' -and !$DirectWord) {
 if ($Advanced -eq 'bilingual-expansion' -and !$AddedWord) {
     throw 'Supply an exact Russian headword available only after expansion.'
 }
-if (($LexicalScale -or $ProfileOnly) -and $Advanced -ne 'morphology') {
-    throw 'LexicalScale and ProfileOnly are available in the isolated morphology workflow.'
+if (($LexicalScale -or $MarathonUsage -or $ProfileOnly) -and $Advanced -ne 'morphology') {
+    throw 'LexicalScale, MarathonUsage and ProfileOnly are available in the isolated morphology workflow.'
 }
+if ($MarathonUsage -and $LexicalScale) { throw 'Select a single enrichment candidate.' }
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $adb = Join-Path $Sdk 'platform-tools/adb.exe'
 $aapt = (Get-ChildItem "$Sdk/build-tools" -Recurse -File -Filter aapt.exe |
@@ -78,7 +80,7 @@ try {
         $buildFolder = ".gradle/$profile-build/app/outputs/apk"
         $arguments = @('--gradle-user-home','.gradle/verification','--offline','--project-cache-dir',
             ".gradle/overnight-$profile",'-Plexiflow.research=true',"-Plexiflow.python=$Python",
-            "-Plexiflow.researchDictionary=$dictionary",':app:assembleDebug')
+            "-Plexiflow.researchDictionary=$dictionary",':app:packageDebug','--rerun',':app:assembleDebug')
         if (!$PersonalProfile) { $arguments += '-Plexiflow.researchCheck=true' }
         if ($Tests) { $arguments += ':app:assembleDebugAndroidTest' }
         & ./gradlew.bat @arguments | Out-Host
@@ -154,6 +156,10 @@ try {
     } elseif ($Advanced -eq 'morphology') {
         $baseline = "$artifacts/research-scaling/bilingual-cefr-20000-content"
         $candidateName = if ($LexicalScale) {'lexical-scale'} else {'ud-expanded'}
+        if ($MarathonUsage) {
+            $baseline = "$artifacts/research-scaling/bilingual-cefr-20000-lexical-scale"
+            $candidateName = 'marathon'
+        }
         $candidate = "$artifacts/research-scaling/bilingual-cefr-20000-$candidateName"
         & $Python research/prototypes/sqlite_poc/research_upgrade.py $baseline $candidate --allow-enrichment |
             Tee-Object -FilePath (Join-Path $run.FullName 'identity.json')
@@ -200,6 +206,10 @@ try {
             $beforeVersion = 'research-bilingual-freedict-2025.11.23-20000-cefr-j-usage-v2-ud-forms'
             $afterVersion = "$beforeVersion-ud-expanded"
             if ($LexicalScale) { $afterVersion += '-usage-expanded' }
+            if ($MarathonUsage) {
+                $beforeVersion = "$afterVersion-usage-expanded"
+                $afterVersion = "$beforeVersion-usage-expanded"
+            }
             $existing = @('-e','lexiflowDirectWord','дом')
             $profileClass = 'app.lexiflow.data.ResearchActivationProfileTest'
             if ($ProfileOnly) {
@@ -216,8 +226,12 @@ try {
                 Run-Test 'scannedMetadataRejectsMissingAndWrongLanguageOwners' 'morphology-attribution-rejection' @() 'app.lexiflow.data.AdvancedManifestTest'
             } else {
                 $formArgs = @('-e','lexiflowCorpus',$afterVersion,'-e','lexiflowEvidence','true')
-                if ($LexicalScale) { $formArgs += @('-e','lexiflowUsageExpanded','true') }
+                if ($LexicalScale -or $MarathonUsage) { $formArgs += @('-e','lexiflowUsageExpanded','true') }
                 Run-Test 'opensSeveralAttributedExamplesAndSearchesInflectedForms' 'morphology-forms' $formArgs
+                if ($MarathonUsage) {
+                    Run-Test 'opensNewMarathonExamplesAndRetainsCefr' 'marathon-examples-cefr' @(
+                        '-e','lexiflowCorpus',$afterVersion,'-e','lexiflowMarathonUsage','true')
+                }
                 Save-AppFrame '13-attributed-usage'
                 Save-AppFrame '14-grammatical-forms'
                 Run-Test 'readsBothLanguagesAfterRestartOrRollback' 'morphology-restart' ($existing+

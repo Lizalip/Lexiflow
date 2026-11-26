@@ -28,6 +28,7 @@ import static app.lexiflow.ui.IsolatedPersonalFlowTest.capture;
 import static androidx.test.espresso.Espresso.onView;
 import static androidx.test.espresso.action.ViewActions.*;
 import static androidx.test.espresso.assertion.ViewAssertions.matches;
+import static androidx.test.espresso.assertion.ViewAssertions.doesNotExist;
 import static androidx.test.espresso.matcher.ViewMatchers.*;
 import static org.hamcrest.Matchers.startsWith;
 import static org.hamcrest.Matchers.containsString;
@@ -64,7 +65,7 @@ public class RealResearchFlowTest {
                     .filter(row -> row.spelling().equals("book") && "n".equals(row.pos()))
                     .findFirst().orElseThrow(AssertionError::new);
             String label=hit.spelling()+" · "+hit.pos()+" · "+target.getString(R.string.sense_title,hit.position())
-                    +"\n"+hit.translation();
+                    +"\n"+TranslationDisplay.wording(hit.translation());
             onView(withText(label)).check(matches(isDisplayed()));
             Log.i(TAG,"book input with debounce and rendered match ms="+(SystemClock.elapsedRealtime()-typed));
             capture(scenario,"02-results");
@@ -146,6 +147,170 @@ public class RealResearchFlowTest {
             onView(withId(R.id.action)).perform(scrollTo(),click());
             await(scenario,state -> state.screen()==Screen.PROGRESS && state.reviewed()==2
                     && state.successful()==2 && state.cards()==2,"review history persisted");
+        }
+    }
+
+    @Test public void opensAdvancedCorpusAndMeasuresSearch() throws Exception {
+        var instrumentation = InstrumentationRegistry.getInstrumentation();
+        var target = instrumentation.getTargetContext();
+        assumeTrue("app.lexiflow.researchcheck".equals(target.getPackageName()));
+        String expected = InstrumentationRegistry.getArguments().getString("lexiflowCorpus");
+        assumeTrue(expected!=null);
+        long start = SystemClock.elapsedRealtime();
+        try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
+            awaitDictionary(scenario,state -> state.status()!=DictionaryRepository.Status.LOADING,
+                    "advanced dictionary settled",120);
+            assertEquals(DictionaryRepository.Status.AVAILABLE,view(scenario).status());
+            assertEquals(expected,view(scenario).corpusVersion());
+            logCapacity(target,start);
+            query("book");
+            awaitDictionary(scenario,state -> state.hits().stream().anyMatch(hit -> "book".equals(hit.spelling())),
+                    "English search returned the original article");
+        }
+        measureRepository(target);
+    }
+
+    @Test public void learnsAnIndependentRussianSenseAfterUpdatingEnglishCorpus() throws Exception {
+        var target = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        assumeTrue("app.lexiflow.researchcheck".equals(target.getPackageName()));
+        String word = InstrumentationRegistry.getArguments().getString("lexiflowDirectWord");
+        assumeTrue(word!=null);
+        try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
+            awaitDictionary(scenario,state -> state.status()!=DictionaryRepository.Status.LOADING,"bilingual loaded",100);
+            assertEquals(DictionaryRepository.Status.AVAILABLE,view(scenario).status());
+            onView(withId(R.id.direction)).perform(click());
+            query(word);
+            awaitDictionary(scenario,state -> state.hits().stream().anyMatch(hit -> "ru".equals(hit.language())
+                    && word.equals(hit.spelling())),"direct Russian source found");
+            var hit = view(scenario).hits().get(0);
+            assertEquals(word,hit.spelling());
+            assertEquals("ru",hit.language());
+            assertNotNull(hit.translation());
+            String label=hit.spelling()+" · "+hit.pos()+" · "+target.getString(R.string.sense_title,hit.position())
+                    +"\n"+TranslationDisplay.wording(hit.translation())+"\n"+target.getString(R.string.direct_russian_article);
+            onView(withText(label)).perform(scrollTo(),click());
+            awaitDictionary(scenario,state -> state.entry()!=null,"direct article opened");
+            var article = view(scenario).entry();
+            assertEquals("ru",article.language());
+            assertEquals(word,article.spelling());
+            assertTrue(article.attribution().contains("RU–EN"));
+            onView(withText(R.string.pronounce_offline)).check(doesNotExist());
+            onView(withText(target.getString(R.string.save_sense,hit.position()))).perform(scrollTo(),click());
+            back();
+            onView(withId(R.id.vocabulary)).perform(click());
+            await(scenario,state -> state.savedCount()==2 && state.saved().stream().anyMatch(row ->
+                    "book".equals(row.spelling) && CUSTOM.equals(row.custom)),"previous English save survived update");
+            String[] actions = target.getResources().getStringArray(R.array.saved_actions);
+            onView(withText(startsWith(word+" · "))).perform(scrollTo(),click());
+            onView(withText(actions[1])).perform(click());
+            onView(withHint(R.string.custom_translation)).perform(replaceText("Local trial gloss"));
+            onView(withHint(R.string.note)).perform(replaceText("Local trial note"),closeSoftKeyboard());
+            onView(withText(R.string.save)).perform(click());
+            await(scenario,state -> state.saved().stream().anyMatch(row -> word.equals(row.spelling)
+                    && "Local trial note".equals(row.note)),"Russian note saved");
+            onView(withText(startsWith(word+" · "))).perform(scrollTo(),click());
+            onView(withText(actions[2])).perform(click());
+            onView(withText(COLLECTION)).perform(click());
+            for (int index : new int[]{4,3}) {
+                onView(withText(startsWith(word+" · "))).perform(scrollTo(),click());
+                onView(withText(actions[index])).perform(click());
+            }
+            onView(withId(R.id.review)).perform(click());
+            await(scenario,state -> state.exercise()!=null && !state.exercise().reverse,"direct card unlocked");
+            action(R.string.reveal);
+            onView(withId(R.id.body)).check(matches(withText("Local trial gloss")));
+            String[] grades = target.getResources().getStringArray(R.array.review_ratings);
+            onView(withText(grades[1])).perform(scrollTo(),click());
+            await(scenario,state -> state.exercise()!=null && state.exercise().reverse,"inverse card unlocked");
+            action(R.string.reveal);
+            onView(withId(R.id.body)).check(matches(withText(word)));
+            onView(withText(grades[2])).perform(scrollTo(),click());
+            await(scenario,state -> state.screen()==Screen.REVIEW && state.exercise()==null,"both directions graded");
+            onView(withId(R.id.action)).perform(scrollTo(),click());
+            await(scenario,state -> state.screen()==Screen.PROGRESS && state.reviewed()==4 && state.cards()==4,
+                    "both languages retain review history");
+        }
+    }
+
+    @Test public void displaysOfficialCefrPerPartOfSpeech() throws Exception {
+        var target = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        assumeTrue("app.lexiflow.researchcheck".equals(target.getPackageName()));
+        try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
+            awaitDictionary(scenario,state -> state.status()!=DictionaryRepository.Status.LOADING,"CEFR corpus opened",120);
+            assertEquals(DictionaryRepository.Status.AVAILABLE,view(scenario).status());
+            assertTrue(view(scenario).corpusVersion().endsWith("-cefr-j"));
+            query("book");
+            awaitDictionary(scenario,state -> state.hits().stream().filter(row -> "book".equals(row.spelling()))
+                    .map(DictionaryRepository.Hit::pos).distinct().count()>=2,"English parts of speech available");
+            var repository = new LocalDictionaryRepository(target);
+            try {
+                repository.load();
+                var overlapping = repository.search("мир",true);
+                assertEquals("ru",overlapping.get(0).language());
+                assertTrue(overlapping.stream().filter(row -> "ru".equals(row.language())
+                        && "мир".equalsIgnoreCase(row.spelling())).map(DictionaryRepository.Hit::entryId).distinct().count()>=2);
+                assertTrue(overlapping.stream().anyMatch(row -> "en".equals(row.language())
+                        && "мир".equals(row.translation())));
+                assertEquals(overlapping.size(),overlapping.stream().map(DictionaryRepository.Hit::senseId).distinct().count());
+                assertTrue(overlapping.size()<=50);
+                var reverseOnly = repository.search("книга",true);
+                assertTrue(reverseOnly.stream().anyMatch(row -> "en".equals(row.language())
+                        && "книга".equals(row.translation())));
+                assertTrue(reverseOnly.stream().noneMatch(row -> "ru".equals(row.language())
+                        && "книга".equals(row.spelling())));
+                assertTrue(repository.search("книг",true).stream().anyMatch(row -> "en".equals(row.language())
+                        && "книга".equals(row.translation())));
+                assertTrue(repository.search("понимать",true).stream().anyMatch(row -> row.accentMatch()
+                        && row.translation().equals("понима\u0301ть")));
+                for (var expected : java.util.Map.of("n","A1","v","B1").entrySet()) {
+                    var found = repository.search("book",false).stream().filter(row -> "book".equals(row.spelling())
+                            && expected.getKey().equals(row.pos())).findFirst().orElseThrow();
+                    var article = repository.entry(found.entryId());
+                    assertTrue(article.metadata().stream().anyMatch(value -> "cefr".equals(value.kind())
+                            && expected.getValue().equals(value.value())));
+                    assertTrue(article.senses().stream().flatMap(sense -> sense.metadata().stream())
+                            .noneMatch(value -> "cefr".equals(value.kind())));
+                }
+            } finally {
+                repository.close();
+            }
+            var hit = view(scenario).hits().stream().filter(row -> "book".equals(row.spelling()) && "n".equals(row.pos()))
+                    .findFirst().orElseThrow();
+            onView(withText("book · n · "+target.getString(R.string.sense_title,hit.position())
+                    +"\n"+TranslationDisplay.wording(hit.translation()))).perform(scrollTo(),click());
+            awaitDictionary(scenario,state -> state.entry()!=null,"CEFR article displayed");
+            onView(withText(containsString("CEFR-J Wordlist Version 1.6"))).perform(scrollTo()).check(matches(isDisplayed()));
+        }
+    }
+
+    @Test public void readsBothLanguagesAfterRestartOrRollback() throws Exception {
+        var args = InstrumentationRegistry.getArguments();
+        String word = args.getString("lexiflowDirectWord");
+        var target = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        assumeTrue(word!=null && "app.lexiflow.researchcheck".equals(target.getPackageName()));
+        boolean rollback = "true".equals(args.getString("lexiflowRollback"));
+        try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
+            awaitAvailable(scenario);
+            onView(withId(R.id.vocabulary)).perform(click());
+            await(scenario,state -> state.savedCount()==2 && state.saved().stream().anyMatch(row ->
+                    word.equals(row.spelling) && "Local trial note".equals(row.note)
+                    && "Local trial gloss".equals(row.custom)),"both saved languages persisted");
+            onView(withText(startsWith(word+" · "))).perform(scrollTo(),click());
+            onView(withText(R.string.open_saved)).perform(click());
+            awaitDictionary(scenario,state -> state.status()==DictionaryRepository.Status.AVAILABLE,
+                    "saved link opened");
+            if (rollback) onView(withText(R.string.entry_unavailable)).check(matches(isDisplayed()));
+            else assertEquals(word,view(scenario).entry().spelling());
+            back();
+            onView(withId(R.id.action)).perform(scrollTo(),click());
+            onView(withText(COLLECTION)).perform(scrollTo(),click());
+            await(scenario,state -> state.collection()!=0 && state.saved().size()==2,"collection persisted");
+            back();
+            back();
+            onView(withId(R.id.review)).perform(click());
+            onView(withId(R.id.action)).perform(scrollTo(),click());
+            await(scenario,state -> state.screen()==Screen.PROGRESS && state.cards()==4 && state.reviewed()==4,
+                    "bilingual review history persisted");
         }
     }
 
@@ -414,6 +579,11 @@ public class RealResearchFlowTest {
 
     private static void awaitDictionary(ActivityScenario<MainActivity> scenario,
             Predicate<FoundationViewModel.DictionaryView> condition,String label) throws InterruptedException {
+        awaitDictionary(scenario,condition,label,40);
+    }
+
+    private static void awaitDictionary(ActivityScenario<MainActivity> scenario,
+            Predicate<FoundationViewModel.DictionaryView> condition,String label,int seconds) throws InterruptedException {
         var settled = new CountDownLatch(1);
         androidx.lifecycle.Observer<FoundationViewModel.DictionaryView> observer = value -> {
             if (value!=null && condition.test(value)) settled.countDown();
@@ -421,7 +591,7 @@ public class RealResearchFlowTest {
         scenario.onActivity(activity -> new ViewModelProvider(activity).get(FoundationViewModel.class)
                 .dictionaryView.observeForever(observer));
         try {
-            assertTrue(label,settled.await(40,TimeUnit.SECONDS));
+            assertTrue(label,settled.await(seconds,TimeUnit.SECONDS));
         } finally {
             scenario.onActivity(activity -> new ViewModelProvider(activity).get(FoundationViewModel.class)
                     .dictionaryView.removeObserver(observer));

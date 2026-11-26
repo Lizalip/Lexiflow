@@ -34,6 +34,7 @@ public final class MainActivity extends AppCompatActivity {
     private TextInputEditText query;
     private TextInputEditText savedQuery;
     private OfflinePronunciation pronunciation;
+    private MaterialButton pronunciationButton;
     private Integer restoredPersonalScroll;
     private final OnBackPressedCallback back = new OnBackPressedCallback(false) {
         @Override public void handleOnBackPressed() {
@@ -228,7 +229,11 @@ public final class MainActivity extends AppCompatActivity {
                 for (var hit : state.hits()) {
                     String label = hit.spelling() + (hit.pos() == null ? "" : " · " + hit.pos())
                             + " · " + getString(R.string.sense_title, hit.position());
-                    if (hit.translation() != null) label += "\n" + hit.translation();
+                    if (hit.translation() != null) label += "\n" + (state.corpusVersion()!=null
+                            && state.corpusVersion().startsWith("research-")
+                            ? TranslationDisplay.wording(hit.translation()) : hit.translation());
+                    if ("ru".equals(hit.language())) label += "\n" + getString(R.string.direct_russian_article);
+                    if (hit.accentMatch()) label += "\n" + getString(R.string.accent_search_match);
                     if (hit.matchedForm() != null) label += "\n" + getString(R.string.matched_form,hit.matchedForm());
                     addAction(rows, label, () -> {
                         rememberSearchPosition();
@@ -249,24 +254,32 @@ public final class MainActivity extends AppCompatActivity {
     }
 
     private void renderEntry(LinearLayout rows, TextView heading, TextView body, DictionaryRepository.Entry entry) {
+        pronunciationButton = null;
         heading.setText(entry.spelling());
         body.setText(entry.pos());
         if (model.dictionaryView.getValue().synthetic()) {
             if (entry.pos() == null) body.setText(R.string.dictionary_synthetic);
             else body.setText(getString(R.string.dictionary_synthetic_pos,entry.pos()));
         }
-        if (pronunciation == null) pronunciation = new OfflinePronunciation(this,this::renderDictionary);
-        if (pronunciation.available()) {
-            addAction(rows,getString(R.string.pronounce_offline),() -> {
+        if ("en".equals(entry.language()) && pronunciation == null) {
+            pronunciation = new OfflinePronunciation(this,this::updatePronunciationButton);
+        }
+        if ("en".equals(entry.language())) {
+            pronunciationButton = addAction(rows,getString(R.string.pronounce_offline),() -> {
                 if (!pronunciation.speak(entry.spelling())) {
                     Toast.makeText(this,R.string.pronunciation_error,Toast.LENGTH_SHORT).show();
                 }
             });
+            updatePronunciationButton();
+        }
+        if ("ru".equals(entry.language())) {
+            if (pronunciation != null) pronunciation.stop();
+            body.setText(getString(R.string.direct_russian_part_of_speech,entry.pos()));
         }
         addAction(rows,getString(R.string.save_entry),() -> model.save(entry,null));
         boolean research = LocalDictionaryRepository.isResearchProfile(this);
         if (!research) addMetadata(rows,entry.metadata(),false);
-        else addMetadata(rows,entry.metadata().stream().filter(MainActivity::pronunciationMetadata)
+        else addMetadata(rows,entry.metadata().stream().filter(MainActivity::primaryArticleMetadata)
                 .collect(java.util.stream.Collectors.toList()),false);
         if (!entry.forms().isEmpty()) {
             TextView forms = (TextView)getLayoutInflater().inflate(R.layout.entry_forms,rows,false);
@@ -279,7 +292,9 @@ public final class MainActivity extends AppCompatActivity {
             TextView details = inflateArticleDetail(rows);
             StringBuilder text = new StringBuilder(getString(R.string.sense_title, sense.position()));
             if (sense.id().equals(model.selectedSense())) text.append(" · ").append(getString(R.string.selected_sense));
-            for (String word : sense.translations()) text.append("\n").append(word);
+            for (String word : research ? TranslationDisplay.alternatives(sense.translations()) : sense.translations()) {
+                text.append("\n").append(word);
+            }
             for (var example : sense.examples()) {
                 text.append("\n\n").append(example.body());
                 if (example.translation() != null) text.append("\n").append(example.translation());
@@ -297,19 +312,25 @@ public final class MainActivity extends AppCompatActivity {
             }
             addAction(rows,getString(R.string.save_sense,sense.position()),() -> model.save(entry,sense));
         }
-        if (research) addMetadata(rows,entry.metadata().stream().filter(value -> !pronunciationMetadata(value))
+        if (research) addMetadata(rows,entry.metadata().stream().filter(value -> !primaryArticleMetadata(value))
                 .collect(java.util.stream.Collectors.toList()),true);
         TextView credit = inflateArticleDetail(rows);
         credit.setText(entry.attribution());
         rows.addView(credit);
     }
 
+    private void updatePronunciationButton() {
+        if (pronunciationButton != null) {
+            pronunciationButton.setVisibility(pronunciation.available() ? View.VISIBLE : View.GONE);
+        }
+    }
+
     private TextView inflateArticleDetail(LinearLayout rows) {
         return (TextView)getLayoutInflater().inflate(R.layout.article_detail,rows,false);
     }
 
-    private static boolean pronunciationMetadata(DictionaryRepository.Metadata value) {
-        return "ipa".equals(value.kind()) || "pronunciation".equals(value.kind());
+    private static boolean primaryArticleMetadata(DictionaryRepository.Metadata value) {
+        return "ipa".equals(value.kind()) || "pronunciation".equals(value.kind()) || "cefr".equals(value.kind());
     }
 
     private void addMetadata(LinearLayout rows,java.util.List<DictionaryRepository.Metadata> metadata,
@@ -404,6 +425,15 @@ public final class MainActivity extends AppCompatActivity {
 
     private void savedMenu(PersonalDatabase.Saved item, FoundationViewModel.PersonalView state) {
         String[] options = getResources().getStringArray(R.array.saved_actions);
+        String language = state.sourceLanguages().get(item.entryId);
+        if ("ru".equals(language)) {
+            String original = options[3];
+            options[3] = options[4];
+            options[4] = original;
+        } else if (language == null) {
+            options[3] = getString(R.string.card_word_to_translation);
+            options[4] = getString(R.string.card_translation_to_word);
+        }
         new MaterialAlertDialogBuilder(this).setTitle(item.spelling).setItems(options,(dialog,choice) -> {
             switch (choice) {
                 case 0 -> openSavedFromList(item);
@@ -554,11 +584,12 @@ public final class MainActivity extends AppCompatActivity {
         }
     }
 
-    private void addAction(LinearLayout rows, CharSequence label, Runnable action) {
+    private MaterialButton addAction(LinearLayout rows, CharSequence label, Runnable action) {
         MaterialButton button = (MaterialButton) getLayoutInflater().inflate(R.layout.action_row,rows,false);
         button.setText(label);
         button.setOnClickListener(v -> action.run());
         rows.addView(button);
+        return button;
     }
 
     private void rememberSearchPosition() {

@@ -116,7 +116,12 @@
     <string name="no_saved_matches">Совпадений среди сохранённых слов нет.</string>
     <string name="sort_by_recent">Сначала недавно сохранённые</string>
     <string name="sort_by_spelling">Сортировать по написанию</string>
-    <string name="research_corpus_notice">Исследовательская версия · FreeDict EN–RU 2025.11.23 · CC BY-SA 3.0. Переводы источника ожидают редакторской проверки.</string>
+    <string name="research_corpus_notice">Исследовательская версия · FreeDict 2025.11.23 · CC BY-SA 3.0. Переводы источника ожидают редакторской проверки.</string>
+    <string name="direct_russian_article">Прямая статья RU → EN</string>
+    <string name="card_word_to_translation">Создать карточку «Слово → перевод»</string>
+    <string name="card_translation_to_word">Создать карточку «Перевод → слово»</string>
+    <string name="accent_search_match">Совпадение без учёта ударения</string>
+    <string name="direct_russian_part_of_speech">Прямая статья RU → EN · %1$s</string>
     <string name="research_corpus_version_notice">%1$s\nПакет %2$s</string>
     <string name="research_definition_note">Определение источника без привязки к переводу</string>
 </resources>

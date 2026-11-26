@@ -13,6 +13,7 @@ import app.lexiflow.data.PersonalDatabase;
 import app.lexiflow.data.ReviewScheduler;
 import app.lexiflow.R;
 import java.util.List;
+import java.util.Map;
 import java.util.Collections;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -34,7 +35,7 @@ public final class FoundationViewModel extends ViewModel {
     static final int PERSONAL_PAGE_SIZE = 50;
     record PersonalView(Screen screen,long collection,int page,int rowCount,int savedCount,
                         boolean notesOnly,String savedQuery,boolean alphabetical,
-                        List<PersonalDatabase.Saved> saved, List<PersonalDatabase.Collection> collections,
+                        List<PersonalDatabase.Saved> saved, Map<String,String> sourceLanguages, List<PersonalDatabase.Collection> collections,
                         PersonalDatabase.Exercise exercise,int cards,int due,int reviewed,int successful) {}
     final MutableLiveData<PersonalView> personalView = new MutableLiveData<>();
     final MutableLiveData<Boolean> personalError = new MutableLiveData<>();
@@ -127,6 +128,8 @@ public final class FoundationViewModel extends ViewModel {
                         : target == Screen.COLLECTIONS && collection != 0
                         ? library.collectionPage(collection,PERSONAL_PAGE_SIZE,offset) : Collections.emptyList();
                 var snapshot = new PersonalView(target,collection,page,rowCount,savedCount,notesOnly,savedQuery,alphabetical,saved,
+                        dictionary.sourceLanguages(saved.stream().map(row -> row.entryId)
+                                .collect(java.util.stream.Collectors.toSet())),
                         target == Screen.VOCABULARY || target == Screen.COLLECTIONS || target == Screen.PROGRESS
                                 ? library.collections() : Collections.emptyList(),
                         target == Screen.REVIEW ? library.next(now) : null,

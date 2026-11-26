@@ -17,6 +17,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.security.DigestInputStream;
@@ -34,6 +35,8 @@ import java.util.function.BiConsumer;
 /** Called on one background executor. SQLite connections always open read-only. */
 public final class LocalDictionaryRepository implements DictionaryRepository {
     private static final String[] TABLES = {"entry", "sense", "translation", "form", "example", "example_translation"};
+    private static final byte[] URL_NAMESPACE = ByteBuffer.allocate(16)
+            .putLong(0x6ba7b8119dad11d1L).putLong(0x80b400c04fd430c8L).array();
     private static final Set<String> LANGUAGES = Collections.unmodifiableSet(new HashSet<>(Arrays.asList("en","ru")));
     private static final Set<String> METADATA_LINKS = new HashSet<>(
             Arrays.asList("entry:entry_id:id","sense:sense_id:id","form:form_id:id"));
@@ -256,7 +259,7 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
     }
 
     private String validation(String manifestDigest,String databaseDigest) {
-        return "2\n" + (isResearchProfile(context) ? "research" : debug() ? "debug" : "apk") + "\n"
+        return "3\n" + (isResearchProfile(context) ? "research" : debug() ? "debug" : "apk") + "\n"
                 + android.os.Build.VERSION.SDK_INT + "\n" + android.os.Build.VERSION.INCREMENTAL + "\n"
                 + android.icu.lang.UCharacter.getUnicodeVersion() + "\n" + manifestDigest + "\n" + databaseDigest;
     }
@@ -301,16 +304,35 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
                     }
                 }
             }
-            if (candidate.schema() == 2) {
+            String englishOnly = candidate.schema()==3 ? " AND language='en'" : "";
+            for (var entry : candidate.entryCefr().entrySet()) {
+                try (Cursor row = opened.rawQuery("SELECT search_key,pos FROM entry WHERE id=?"+englishOnly,
+                        new String[]{entry.getKey()})) {
+                    if (!row.moveToFirst()) throw new JSONException("missing CEFR owner");
+                    for (var label : entry.getValue()) {
+                        if (!label.belongsTo(row.getString(0),row.getString(1))) throw new JSONException("invalid CEFR owner");
+                    }
+                }
+            }
+            if (candidate.schema() >= 2) {
                 checkMetadata(opened,candidate);
                 checkIndexColumns(opened,"translation_preview","translation","sense_id","search_key","wording");
                 checkIndexColumns(opened,"form_parent","form","entry_id","id");
                 checkIndexColumns(opened,"example_parent","example","sense_id","id");
                 checkIndexColumns(opened,"example_translation_parent","example_translation","example_id","id");
             }
-            try (Cursor ids = opened.rawQuery("SELECT id FROM entry UNION ALL SELECT id FROM sense",null)) {
-                while (ids.moveToNext()) if (!validId(ids.getString(0))) throw new SQLiteException("invalid persistent ID");
+            if (candidate.schema()==3) {
+                checkIndexColumns(opened,"entry_language_search","entry","language","search_key","id");
+                checkIndexColumns(opened,"translation_language_search","translation","language","search_key","sense_id");
+                if (!"2".equals(scalar(opened,"SELECT count(DISTINCT language) FROM entry"))
+                        || !"0".equals(scalar(opened,"SELECT count(*) FROM translation t JOIN sense s ON s.id=t.sense_id"
+                        +" JOIN entry e ON e.id=s.entry_id WHERE t.language=e.language"
+                        +" OR t.language IS NULL OR e.language IS NULL"
+                        +" OR t.language NOT IN ('en','ru') OR e.language NOT IN ('en','ru')"))) {
+                    throw new SQLiteException("invalid bilingual direction");
+                }
             }
+            checkPersistentIds(opened,candidate);
             try (Cursor overlap = opened.rawQuery("SELECT id FROM (SELECT id FROM entry UNION ALL SELECT id FROM sense)"
                     + " GROUP BY id HAVING count(*)>1 LIMIT 1",null)) {
                 if (overlap.moveToFirst()) throw new SQLiteException("duplicate persistent ID");
@@ -334,10 +356,18 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
             for (String sql : probes) {
                 try (Cursor probe = opened.rawQuery(sql,null)) { probe.getColumnNames(); }
             }
+            boolean bilingual = candidate.schema()==3;
             try (Cursor refs = opened.rawQuery("SELECT t.origin_attribution_id,t.attribution_id,s.attribution_id,e.attribution_id"
+                    + (bilingual ? ",e.language" : "")
                     + " FROM translation t JOIN sense s ON s.id=t.sense_id JOIN entry e ON e.id=s.entry_id",null)) {
                 while (refs.moveToNext()) {
                     var origin = candidate.attribution(refs.getString(0)).policy().source();
+                    if (bilingual) {
+                        String snapshot = "ru".equals(refs.getString(4))
+                                ? "9ab8e1a00c463f631e510899d20d26738b11af7b8cdddf8e44a396ba8349bfd5"
+                                : "f3dadcc29d7df6e77edb13b98a2ba2c3fac002852eddd8b557637f0b13d39c39";
+                        if (!snapshot.equals(origin.snapshot())) throw new JSONException("source does not own article language");
+                    }
                     for (int i = 1; i < 4; i++) {
                         var source = candidate.attribution(refs.getString(i)).policy().source();
                         if (!origin.name().equals(source.name()) || !origin.snapshot().equals(source.snapshot())) {
@@ -397,6 +427,37 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
     private static boolean validId(String value) {
         try { return value != null && UUID.fromString(value).toString().equals(value); }
         catch (IllegalArgumentException invalid) { return false; }
+    }
+
+    private static void checkPersistentIds(SQLiteDatabase db,PackageManifest candidate) throws JSONException {
+        boolean bilingual = candidate.schema()==3;
+        String columns = bilingual ? "id,attribution_id," : "id,";
+        MessageDigest digest = null;
+        if (bilingual) {
+            try { digest = MessageDigest.getInstance("SHA-1"); }
+            catch (NoSuchAlgorithmException missing) { throw new IllegalStateException(missing); }
+        }
+        try (Cursor ids = db.rawQuery("SELECT "+columns+"'entry' FROM entry UNION ALL SELECT "
+                +columns+"'sense' FROM sense",null)) {
+            while (ids.moveToNext()) {
+                String id = ids.getString(0);
+                if (!validId(id)) throw new SQLiteException("invalid persistent ID");
+                if (digest != null) {
+                    // UUIDv5 defines SHA-1 for namespace derivation. Package integrity uses SHA-256.
+                    var evidence = candidate.attribution(ids.getString(1));
+                    String name = "lexiflow/research/"+evidence.policy().source().snapshot()+"/"
+                            +ids.getString(2)+"/"+evidence.locator();
+                    digest.update(URL_NAMESPACE);
+                    byte[] hash = digest.digest(name.getBytes(StandardCharsets.UTF_8));
+                    hash[6] = (byte)((hash[6]&0x0f)|0x50);
+                    hash[8] = (byte)((hash[8]&0x3f)|0x80);
+                    var bytes = ByteBuffer.wrap(hash);
+                    if (!new UUID(bytes.getLong(),bytes.getLong()).toString().equals(id)) {
+                        throw new SQLiteException("persistent ID does not match source locator");
+                    }
+                }
+            }
+        }
     }
 
     private static void checkTable(SQLiteDatabase db,PackageManifest candidate,String table) throws JSONException {
@@ -572,8 +633,9 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
         if (database == null || query.codePointCount(0, query.length()) > 256) return Collections.emptyList();
         String key = SearchNormalization.normalize(query);
         if (key.isEmpty()) return Collections.emptyList();
-        List<Hit> results = queryHits(DictionarySearch.ranked(key,reverse));
-        if (reverse && results.isEmpty() && manifest.research()) {
+        boolean bilingual = manifest.schema()==3;
+        List<Hit> results = queryHits(DictionarySearch.ranked(key,reverse,bilingual));
+        if (!bilingual && reverse && results.isEmpty() && manifest.research()) {
             var fallback = DictionarySearch.russianStressFallback(key);
             if (fallback != null) return queryHits(fallback);
         }
@@ -584,7 +646,8 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
         List<Hit> results = new ArrayList<>();
         try (Cursor cursor = database.rawQuery(query.sql(),query.arguments())) {
             while (cursor.moveToNext()) results.add(new Hit(cursor.getString(0),cursor.getString(1),
-                    cursor.getString(2),cursor.getString(3),cursor.getInt(4),cursor.getString(5),cursor.getString(6)));
+                    cursor.getString(2),cursor.getString(3),cursor.getInt(4),cursor.getString(5),cursor.getString(6),
+                    cursor.getString(7),cursor.getInt(8)!=0));
         }
         return results;
     }
@@ -599,8 +662,10 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
 
     @Override public synchronized Entry entry(String id) {
         if (database == null) return null;
-        try (Cursor entry = database.rawQuery("SELECT spelling,pos,attribution_id FROM entry WHERE id=?",new String[]{id})) {
+        String languageColumn = manifest.schema()==3 ? "language" : "'en'";
+        try (Cursor entry = database.rawQuery("SELECT spelling,pos,attribution_id,"+languageColumn+" FROM entry WHERE id=?",new String[]{id})) {
             if (!entry.moveToFirst()) return null;
+            String language = entry.getString(3);
             List<Sense> senses = new ArrayList<>();
             try (Cursor rows = database.rawQuery("SELECT id,position,attribution_id FROM sense WHERE entry_id=? ORDER BY position",new String[]{id})) {
                 while (rows.moveToNext()) {
@@ -639,12 +704,31 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
             var notes = manifest.entryNotes().get(id);
             if (notes != null) {
                 for (var note : notes) {
-                    entryMetadata.add(new Metadata("definition",note.text(),"en",null,note.definition().displayCredit()));
+                    entryMetadata.add(new Metadata("definition",note.text(),language,null,note.definition().displayCredit()));
                 }
             }
+            var cefr = manifest.entryCefr().get(id);
+            if (cefr != null) {
+                var levels = new java.util.TreeSet<String>();
+                for (var label : cefr) levels.add(label.level());
+                entryMetadata.add(new Metadata("cefr",String.join(" · ",levels),"en",null,
+                        cefr.get(0).evidence().displayCredit()));
+            }
             return new Entry(id,entry.getString(0),entry.getString(1),senses,attribution(entry.getString(2)),
-                    entryMetadata,new ArrayList<>(forms));
+                    entryMetadata,new ArrayList<>(forms),language);
         }
+    }
+
+    public synchronized java.util.Map<String,String> sourceLanguages(Set<String> ids) {
+        if (database==null || ids.isEmpty()) return Collections.emptyMap();
+        String language = manifest.schema()==3 ? "language" : "'en'";
+        String slots = String.join(",",Collections.nCopies(ids.size(),"?"));
+        var result = new java.util.HashMap<String,String>();
+        try (Cursor rows = database.rawQuery("SELECT id,"+language+" FROM entry WHERE id IN ("+slots+")",
+                ids.toArray(new String[0]))) {
+            while (rows.moveToNext()) result.put(rows.getString(0),rows.getString(1));
+        }
+        return result;
     }
 
     private List<Metadata> metadata(String id,boolean sense) {

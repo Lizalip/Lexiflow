@@ -66,6 +66,13 @@ public class PackageReceiptTest {
             Path receipt = active.resolve("validation-receipt");
             byte[] prior = Files.readAllBytes(receipt);
             repository.close();
+            String current = new String(Files.readAllBytes(receipt),StandardCharsets.UTF_8);
+            assertTrue(current.startsWith("3\n"));
+            Files.write(receipt,("2"+current.substring(1)).getBytes(StandardCharsets.UTF_8));
+            repository.load();
+            assertEquals(DictionaryRepository.Status.AVAILABLE,repository.status());
+            assertEquals(current,new String(Files.readAllBytes(receipt),StandardCharsets.UTF_8));
+            repository.close();
             var sidecar = active.resolve("dictionary.sqlite-wal");
             Files.createFile(sidecar);
             repository.load();

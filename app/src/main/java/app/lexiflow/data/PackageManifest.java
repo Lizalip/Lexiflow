@@ -22,7 +22,8 @@ import java.util.regex.Pattern;
 /** Compact links share immutable policies for the lifetime of the open package. */
 record PackageManifest(int format, int schema, String version, String unicode, String digest, boolean research,
                        Map<String,Object> counts, Map<String,Attribution> attributions,
-                       Map<String,ContextLink> contexts,Map<String,List<EntryNote>> entryNotes) {
+                       Map<String,ContextLink> contexts,Map<String,List<EntryNote>> entryNotes,
+                       Map<String,List<CefrLabel>> entryCefr) {
     static final String NORMALIZATION = "nfc-casefold-nfc-python-whitespace-v1";
     private static final String RESEARCH_POLICY = "research-local-v1";
     private static final Pattern SHA256 = Pattern.compile("[0-9a-f]{64}");
@@ -65,6 +66,11 @@ record PackageManifest(int format, int schema, String version, String unicode, S
                     + "/sense/(0|[1-9][0-9]*)/sense/(0|[1-9][0-9]*)/def/(0|[1-9][0-9]*)");
         }
     }
+    record CefrLabel(String level,Attribution evidence) {
+        boolean belongsTo(String lemma,String pos) {
+            return evidence.modification().equals(RESEARCH_POLICY+": CEFR-J lemma="+lemma+"; pos="+pos);
+        }
+    }
 
     static PackageManifest parse(Reader input) throws IOException, JSONException {
         return parse(input,null,true);
@@ -79,7 +85,7 @@ record PackageManifest(int format, int schema, String version, String unicode, S
         if (timing != null) timing.accept("json_with_input",System.nanoTime()-started);
         int format = integer(root.get("package_format"));
         int schema = integer(root.get("schema_version"));
-        if ((format != 1 && format != 2) || (schema != 1 && schema != 2)
+        if ((format < 1 || format > 3) || (schema < 1 || schema > 3)
                 || !NORMALIZATION.equals(root.get("normalization"))
                 || !Arrays.asList("en-ru","ru-en").equals(root.get("language_pairs"))) {
             throw new UnsupportedOperationException("unsupported package");
@@ -88,9 +94,14 @@ record PackageManifest(int format, int schema, String version, String unicode, S
         if (!SHA256.matcher(digest).matches()) throw new JSONException("invalid database digest");
         String version = requiredText(root.get("corpus_version"));
         boolean research = version.toLowerCase(java.util.Locale.ROOT).startsWith("research-");
-        if (research ? format != 2 || schema != 2 || !RESEARCH_POLICY.equals(root.get("distribution_policy"))
-                : root.containsKey("distribution_policy") || root.containsKey("source_entry_notes")) {
+        if (research ? format < 2 || schema < 2 || !RESEARCH_POLICY.equals(root.get("distribution_policy"))
+                : root.containsKey("distribution_policy") || root.containsKey("source_entry_notes")
+                || root.containsKey("entry_cefr")) {
             throw new JSONException("inconsistent research package markers");
+        }
+        if ((format == 3 && !research) || ((schema == 3 || root.containsKey("entry_cefr")) && format != 3)
+                || (root.containsKey("modifications") != (format == 3))) {
+            throw new JSONException("invalid modification table format");
         }
         started = System.nanoTime();
         var attributions = decode(root,format,verifyAttributionIds,research);
@@ -114,7 +125,44 @@ record PackageManifest(int format, int schema, String version, String unicode, S
             if (contexts.isEmpty()) throw new JSONException("empty sense context extension");
         }
         return new PackageManifest(format,schema,version,requiredText(root.get("unicode_version")),digest,research,
-                object(root.get("counts")),attributions,contexts,decodeEntryNotes(root,attributions));
+                object(root.get("counts")),attributions,contexts,decodeEntryNotes(root,attributions),
+                decodeEntryCefr(root,attributions));
+    }
+
+    private static Map<String,List<CefrLabel>> decodeEntryCefr(Map<String,Object> root,
+                Map<String,Attribution> attributions) throws JSONException {
+        if (!root.containsKey("entry_cefr")) return java.util.Collections.emptyMap();
+        Map<String,Object> extension = object(root.get("entry_cefr"));
+        if (extension.size()!=2 || integer(extension.get("version"))!=1) throw new JSONException("invalid entry CEFR");
+        var result = new HashMap<String,List<CefrLabel>>();
+        for (var entry : object(extension.get("entries")).entrySet()) {
+            var labels = array(entry.getValue());
+            if (labels.isEmpty() || labels.size()>16) throw new JSONException("invalid CEFR label count");
+            List<CefrLabel> parsed = new ArrayList<>();
+            Set<String> seen = new HashSet<>();
+            for (Object item : labels) {
+                var row = object(item);
+                String level = requiredText(row.get("level"));
+                String reference = requiredText(row.get("evidence"));
+                Attribution evidence = attributions.get(reference);
+                if (row.size()!=2 || !level.matches("[AB][12]") || !seen.add(reference) || evidence==null
+                        || !evidence.locator().matches("ALL_sep/row/[1-9][0-9]*/"+level)) {
+                    throw new JSONException("invalid entry CEFR label");
+                }
+                Policy policy = evidence.policy();
+                if (!"CEFR-J Wordlist 1.6".equals(policy.source().name())
+                        || !"c837d2c00ab8954ed8db48e79afd8ef37099570295fec36950dbf9322303a37a".equals(policy.source().snapshot())
+                        || !"https://www.cefr-j.org/download.html".equals(policy.source().url())
+                        || !policy.source().url().equals(policy.terms())
+                        || !"CEFR-J-Wordlist-1.6-attribution".equals(policy.license())) {
+                    throw new JSONException("invalid CEFR source");
+                }
+                parsed.add(new CefrLabel(level,evidence));
+            }
+            result.put(entry.getKey(),parsed);
+        }
+        if (result.isEmpty()) throw new JSONException("empty CEFR extension");
+        return result;
     }
 
     private static Map<String,List<EntryNote>> decodeEntryNotes(Map<String,Object> root,
@@ -149,7 +197,7 @@ record PackageManifest(int format, int schema, String version, String unicode, S
             throws JSONException {
         List<Policy> policies = new ArrayList<>();
         List<CanonicalPolicy> encodedPolicies = new ArrayList<>();
-        if (format == 2) {
+        if (format >= 2) {
             Set<Policy> distinct = new HashSet<>();
             for (Object raw : array(root.get("policies"))) {
                 Map<String,Object> fields = object(raw);
@@ -161,6 +209,17 @@ record PackageManifest(int format, int schema, String version, String unicode, S
                     encodedPolicies.add(new CanonicalPolicy(policy));
                 }
             }
+        }
+        List<String> modifications = new ArrayList<>();
+        Set<Integer> usedModifications = new HashSet<>();
+        if (format == 3) {
+            Set<String> distinct = new HashSet<>();
+            for (Object raw : array(root.get("modifications"))) {
+                String value = requiredText(raw);
+                if (!distinct.add(value)) throw new JSONException("duplicate modification");
+                modifications.add(value);
+            }
+            if (modifications.isEmpty()) throw new JSONException("empty modification table");
         }
         var used = new HashSet<Integer>();
         var sources = new HashSet<Source>();
@@ -174,13 +233,22 @@ record PackageManifest(int format, int schema, String version, String unicode, S
             if (!SHA256.matcher(entry.getKey()).matches()) throw new JSONException("invalid attribution identifier");
             Attribution attribution;
             CanonicalPolicy encoded = null;
-            if (format == 2) {
+            if (format >= 2) {
                 List<?> row = array(entry.getValue());
                 if (row.size() != 3) throw new JSONException("invalid attribution link");
                 int index = integer(row.get(0));
                 if (index < 0 || index >= policies.size()) throw new JSONException("unknown attribution policy");
                 used.add(index);
-                attribution = new Attribution(policies.get(index),requiredText(row.get(1)),requiredText(row.get(2)));
+                String modification;
+                if (format == 3) {
+                    int ref = integer(row.get(2));
+                    if (ref < 0 || ref >= modifications.size()) throw new JSONException("unknown modification reference");
+                    usedModifications.add(ref);
+                    modification = modifications.get(ref);
+                } else {
+                    modification = requiredText(row.get(2));
+                }
+                attribution = new Attribution(policies.get(index),requiredText(row.get(1)),modification);
                 if (index < encodedPolicies.size()) encoded = encodedPolicies.get(index);
             } else {
                 Map<String,Object> row = object(entry.getValue());
@@ -198,7 +266,9 @@ record PackageManifest(int format, int schema, String version, String unicode, S
             entries.put(entry.getKey(),attribution);
             rows.remove();
         }
-        if (entries.isEmpty() || used.size() != policies.size()) throw new JSONException("missing or unused attribution");
+        if (entries.isEmpty() || used.size() != policies.size() || usedModifications.size() != modifications.size()) {
+            throw new JSONException("missing or unused attribution");
+        }
         Set<Source> declared = new HashSet<>();
         for (Object value : array(root.get("sources"))) {
             List<?> row = array(value);

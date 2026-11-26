@@ -5,11 +5,19 @@ param(
     [string]$Jdk = 'C:/Program Files/Android/Android Studio/jbr',
     [switch]$UpdateResearch,
     [switch]$Measure30000,
-    [switch]$CheckRollback
+    [switch]$CheckRollback,
+    [ValidateSet('full','bilingual')][string]$Advanced,
+    [string]$DirectWord
 )
 
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
+if ($Advanced -and ($UpdateResearch -or $Measure30000 -or $CheckRollback)) {
+    throw 'Advanced experiments must stay in the temporary profile.'
+}
+if ($Advanced -eq 'bilingual' -and !$DirectWord) {
+    throw 'Supply an exact direct Russian headword for the instrumented article scenario.'
+}
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $adb = Join-Path $Sdk 'platform-tools/adb.exe'
 $aapt = (Get-ChildItem "$Sdk/build-tools" -Recurse -File -Filter aapt.exe |
@@ -50,8 +58,10 @@ try {
     $artifacts = 'research/data/processed'
     $old = "$artifacts/research-app/dictionary-research"
     $new = "$artifacts/research-scaling/20000"
-    & $Python research/prototypes/sqlite_poc/research_upgrade.py $old $new |
-        Tee-Object -FilePath (Join-Path $run.FullName 'identity.json')
+    if (!$Advanced) {
+        & $Python research/prototypes/sqlite_poc/research_upgrade.py $old $new |
+            Tee-Object -FilePath (Join-Path $run.FullName 'identity.json')
+    }
 
     function Build-Apk($dictionary,$label,[switch]$PersonalProfile,[switch]$Tests) {
         $profile = if ($PersonalProfile) {'research'} else {'researchcheck'}
@@ -87,23 +97,43 @@ try {
         return $file
     }
 
-    function Run-Test($method,$label) {
+    function Run-Test($method,$label,[string[]]$extras=@()) {
         & $adb -s $serial shell am force-stop $tempApp
-        $args = @('-s',$serial,'shell','am','instrument','-w','-r','-e','class',"$test#$method",
-            "$tempApp.test/androidx.test.runner.AndroidJUnitRunner")
-        $lines = @(& $adb @args)
+        $instrument = @('-s',$serial,'shell','am','instrument','-w','-r','-e','class',"$test#$method")
+        $instrument += $extras
+        $instrument += "$tempApp.test/androidx.test.runner.AndroidJUnitRunner"
+        $lines = @(& $adb @instrument)
         $lines | Set-Content -Encoding utf8 (Join-Path $run.FullName "$label.txt")
         if ('INSTRUMENTATION_STATUS_CODE: 0' -notin $lines -or
             ($lines -join ' ') -notmatch 'OK \(1 test\)') { throw "Research upgrade check failed: $label" }
         Write-Host "$label passed"
     }
 
-    $initial = Build-Apk $old '5000-isolated' -Tests
-    $expanded = Build-Apk $new '20000-isolated'
+    if ($Advanced -eq 'full') {
+        $initial = Build-Apk "$artifacts/research-scaling/full-v3" 'full-isolated' -Tests
+    } elseif ($Advanced -eq 'bilingual') {
+        $initial = Build-Apk $new '20000-isolated' -Tests
+        $expanded = Build-Apk "$artifacts/research-scaling/bilingual-20000-5000" 'bilingual-isolated'
+    } else {
+        $initial = Build-Apk $old '5000-isolated' -Tests
+        $expanded = Build-Apk $new '20000-isolated'
+    }
     $start = [long](& $adb -s $serial shell date '+%s').Trim()
+    $installTime = [Diagnostics.Stopwatch]::StartNew()
     & $adb -s $serial install-multi-package -t $initial (Join-Path $run.FullName 'test.apk') |
         ForEach-Object { $_.Replace($serial,'[tablet]') }
+    Write-Host "Initial APK and test APK installation ms=$($installTime.ElapsedMilliseconds)"
     try {
+        if ($Advanced -eq 'full') {
+            Run-Test 'opensAdvancedCorpusAndMeasuresSearch' 'full-open' @('-e','lexiflowCorpus','research-freedict-2025.11.23-all')
+        } elseif ($Advanced -eq 'bilingual') {
+            Run-Test 'usesRealDictionaryAndPersistsPersonalData' 'english-seed'
+            & $adb -s $serial install -r -t $expanded
+            Run-Test 'learnsAnIndependentRussianSenseAfterUpdatingEnglishCorpus' 'bilingual-learns' @('-e','lexiflowDirectWord',$DirectWord)
+            Run-Test 'readsBothLanguagesAfterRestartOrRollback' 'bilingual-restart' @('-e','lexiflowDirectWord',$DirectWord)
+            & $adb -s $serial install -r -t $initial
+            Run-Test 'readsBothLanguagesAfterRestartOrRollback' 'bilingual-rollback' @('-e','lexiflowDirectWord',$DirectWord,'-e','lexiflowRollback','true')
+        } else {
         Run-Test 'usesRealDictionaryAndPersistsPersonalData' '5000-seed'
         Run-Test 'seedAdditionalUpgradeSaves' '5000-extra-saves'
         & $adb -s $serial install -r -t $expanded
@@ -119,6 +149,7 @@ try {
             & $adb -s $serial install -r -t $initial
             Run-Test 'preservesLearningWhenAnEntryDisappearsOnRollback' '5000-rollback'
         }
+        }
         $crashes = @(& $adb -s $serial logcat -d -b crash -v epoch | Where-Object {
             $_ -match '^\s*([0-9]+)\.' -and [long]$Matches[1] -ge $start -and
             $_ -match 'Process: app\.lexiflow\.researchcheck(?:\.test)?,'
@@ -132,6 +163,7 @@ try {
         & $adb -s $serial uninstall $tempApp
     }
 
+    if ($Advanced) { return }
     $apk = Build-Apk $new '20000-research' -PersonalProfile
     if ($UpdateResearch) {
         if (!(Package-Present $researchApp)) {

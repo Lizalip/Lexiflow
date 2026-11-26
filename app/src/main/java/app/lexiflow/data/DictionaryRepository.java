@@ -6,7 +6,11 @@ import java.util.Set;
 public interface DictionaryRepository {
     enum Status { AVAILABLE, MISSING, INCOMPATIBLE, CORRUPTED, LOADING, ERROR }
     record Hit(String entryId, String senseId, String spelling, String pos, int position,
-               String translation, String matchedForm) {}
+               String translation, String matchedForm, String language, boolean accentMatch) {
+        public Hit(String entryId,String senseId,String spelling,String pos,int position,String translation,String matchedForm) {
+            this(entryId,senseId,spelling,pos,position,translation,matchedForm,"en",false);
+        }
+    }
     record Metadata(String kind,String value,String language,String form,String attribution) {}
     record Example(String body, String translation, String attribution) {}
     record Form(String spelling,String attribution) {}
@@ -14,7 +18,12 @@ public interface DictionaryRepository {
     record Sense(String id, int position, List<String> translations, List<Example> examples, String attribution,
                  List<Metadata> metadata, SenseContext context) {}
     record Entry(String id, String spelling, String pos, List<Sense> senses, String attribution,
-                 List<Metadata> metadata,List<Form> forms) {}
+                 List<Metadata> metadata,List<Form> forms,String language) {
+        public Entry(String id,String spelling,String pos,List<Sense> senses,String attribution,
+                     List<Metadata> metadata,List<Form> forms) {
+            this(id,spelling,pos,senses,attribution,metadata,forms,"en");
+        }
+    }
 
     Status status();
     Set<String> installedLanguages();

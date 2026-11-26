@@ -24,6 +24,40 @@ import static org.junit.Assert.*;
 
 @RunWith(AndroidJUnit4.class)
 public class FunctionalDictionaryTest {
+    @Test public void rejectedHistoryWriteRollsBackCardAndAllowsOneRetry() {
+        var context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        var db = Room.inMemoryDatabaseBuilder(context,PersonalDatabase.class).build();
+        try {
+            var library = db.library();
+            var item = new PersonalDatabase.Saved();
+            item.entryId = "fixture-entry";
+            item.spelling = "fixture";
+            item.answer = "test";
+            var card = new PersonalDatabase.Card();
+            card.savedId = library.save(item);
+            card.due = 1000;
+            library.addCard(card);
+            assertNull(library.next(999));
+            var due = library.next(1000);
+            assertNotNull(due);
+            var sqlite = db.getOpenHelper().getWritableDatabase();
+            sqlite.execSQL("CREATE TRIGGER reject_fixture_history BEFORE INSERT ON review_events "
+                    + "BEGIN SELECT RAISE(ABORT, 'synthetic review failure'); END");
+            assertThrows(SQLiteException.class,() -> library.grade(due,2,1000,ReviewScheduler::basic));
+            assertEquals(due.id,library.next(1000).id);
+            assertEquals(1000,library.next(1000).due);
+            assertEquals(0,library.reviewCount());
+            assertEquals(0,library.successCount());
+            sqlite.execSQL("DROP TRIGGER reject_fixture_history");
+            assertTrue(library.grade(due,0,1000,ReviewScheduler::basic));
+            assertFalse(library.grade(due,2,1000,ReviewScheduler::basic));
+            assertEquals(1,library.reviewCount());
+            assertEquals(0,library.successCount());
+            assertNull(library.next(600_999));
+            assertEquals(due.id,library.next(601_000).id);
+        } finally { db.close(); }
+    }
+
     @Test public void releaseRepositoryDoesNotAcceptExternalDebugStreams() throws Exception {
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
         File folder = new File(context.getCacheDir(),"release-" + java.util.UUID.randomUUID());

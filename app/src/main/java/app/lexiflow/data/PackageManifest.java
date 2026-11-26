@@ -42,7 +42,12 @@ record PackageManifest(int format, int schema, String version, String unicode, S
             "bf66869fa1e9932bab6d072da34f84dd8946c2f0c1a6f701ebbb5001c9c041ae",
             "45b6c7932938f6fdf28e57d1fb93179fe3e3da6b571618644637d4c98c1a0daa",
             "2c5e49c6572a557d5c2e5eb535cb424fe6ca07f16cc18d609a157591d4eeaef8",
-            "3628089b14996fb5df66f70ac291c6220a8dcd1ad757535985ed4fc170548a00"));
+            "3628089b14996fb5df66f70ac291c6220a8dcd1ad757535985ed4fc170548a00",
+            "8dc0d70f7cccbd5f75c43e12ac2a8022a477015d705bfeceb6a7dbce43caf5b8",
+            "ea9c41dd1266983778b30bd746fbe6ab1f7c6ce84c4c5d2e5c1bc603a80ba70a",
+            "d909771707edf5736e02eabae2d398221d773dfab632517b4333728df95f6644",
+            "757a64e40c9e53f5717c95ee21708e6563b2525a408e8250fe74082d5212e012",
+            "c07e812edd7bb1bdf9164c8ef090ce82e52ff7410ee6ce2b9c8843edec9c4b53"));
     private static final List<String> USAGE_POS = Arrays.asList("n","v","adj","adv");
     private static final Pattern USAGE_WORD = Pattern.compile("[\\p{L}\\p{N}]+(?:['’-][\\p{L}\\p{N}]+)*");
     private static final Pattern SHA256 = Pattern.compile("[0-9a-f]{64}");

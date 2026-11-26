@@ -1,13 +1,23 @@
 import copy
+import re
 import sqlite3
 import unittest
 from contextlib import closing
+from pathlib import Path
 
+from release_package import BASE_USAGE_CAPTURES, FINAL_USAGE_CAPTURES, USAGE_CAPTURES, USAGE_SNAPSHOT
 from release_package import expand_attributions, validate_entry_usage
 from research_example_package import add_curated_examples, add_example
 
 
 class ResearchUsageExampleTest(unittest.TestCase):
+    def test_new_captures_are_separate_and_match_android_source_policy(self):
+        self.assertTrue(BASE_USAGE_CAPTURES.keys().isdisjoint(FINAL_USAGE_CAPTURES))
+        project = Path(__file__).resolve().parents[3]
+        reader = (project/'app/src/main/java/app/lexiflow/data/PackageManifest.java').read_text(encoding='utf-8')
+        registry = reader.split('USAGE_CAPTURES =',1)[1].split('USAGE_POS =',1)[0]
+        self.assertEqual(set(USAGE_CAPTURES.values()),{USAGE_SNAPSHOT,*re.findall(r'[a-f0-9]{64}',registry)})
+
     def test_curated_v2_checks_owner_whole_token_and_distinct_sentences(self):
         def linked(original, translated, text, *, owner='fixture-owner',language='rus'):
             return dict(id=original,lang='eng',text=text,owner=owner,license='CC BY 2.0 FR',

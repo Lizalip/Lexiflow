@@ -24,7 +24,7 @@ CEFR_LICENSE = 'CEFR-J-Wordlist-1.6-attribution'
 USAGE_SOURCE = 'Tatoeba API v1'
 USAGE_URL = 'https://api.tatoeba.org/'
 USAGE_SNAPSHOT = 'f4b0e574f5b9f8bee0e8e59b6e4e9c762db2dbbc05a4f02c60f63ad586690dd1'
-USAGE_CAPTURES = {
+BASE_USAGE_CAPTURES = {
     'opened':'3efedbb13c62be14ef6794ba7e6b9ca283dd08f50a87edf99c5a7a4ca9d6e06a',
     'believe':'0d4a2eaf2d2c45923a4dced2a2b5ebbd26003ee660a12ce0df8a0bf98f25299c',
     'chance':USAGE_SNAPSHOT,
@@ -40,6 +40,14 @@ USAGE_CAPTURES = {
     'content-window':'2c5e49c6572a557d5c2e5eb535cb424fe6ca07f16cc18d609a157591d4eeaef8',
     'content-write':'3628089b14996fb5df66f70ac291c6220a8dcd1ad757535985ed4fc170548a00',
 }
+FINAL_USAGE_CAPTURES = {
+    'final-decide':'8dc0d70f7cccbd5f75c43e12ac2a8022a477015d705bfeceb6a7dbce43caf5b8',
+    'final-kitchen':'ea9c41dd1266983778b30bd746fbe6ab1f7c6ce84c4c5d2e5c1bc603a80ba70a',
+    'final-pencil':'d909771707edf5736e02eabae2d398221d773dfab632517b4333728df95f6644',
+    'final-remember':'757a64e40c9e53f5717c95ee21708e6563b2525a408e8250fe74082d5212e012',
+    'final-visit':'c07e812edd7bb1bdf9164c8ef090ce82e52ff7410ee6ce2b9c8843edec9c4b53',
+}
+USAGE_CAPTURES = BASE_USAGE_CAPTURES | FINAL_USAGE_CAPTURES
 USAGE_TOKEN = re.compile(r"[^\W_]+(?:['’-][^\W_]+)*")
 USAGE_LICENSES = {'CC BY 2.0 FR':'https://creativecommons.org/licenses/by/2.0/fr/',
                   'CC0 1.0':'https://creativecommons.org/publicdomain/zero/1.0/'}

@@ -6,11 +6,11 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 from prototype import normalize
-from release_package import USAGE_CAPTURES, checksum, connect
+from release_package import BASE_USAGE_CAPTURES, FINAL_USAGE_CAPTURES, checksum, connect
 from research_package import DATA, validate_research_pair
 from research_reverse_aliases import stress_key
 
-CAPTURES = {key:USAGE_CAPTURES[key] for key in ('opened','believe','chance')}
+CAPTURES = {key:BASE_USAGE_CAPTURES[key] for key in ('opened','believe','chance')}
 WORD = re.compile(r"[^\W_]+(?:['’-][^\W_]+)*")
 LICENSES = {'CC BY 2.0 FR':'https://creativecommons.org/licenses/by/2.0/fr/',
             'CC0 1.0':'https://creativecommons.org/publicdomain/zero/1.0/'}
@@ -126,16 +126,19 @@ def main():
     parser.add_argument('captures',type=Path)
     parser.add_argument('output',type=Path)
     parser.add_argument('--usage-candidates',action='store_true')
+    parser.add_argument('--final-captures',action='store_true')
     args = parser.parse_args()
     for path,kind in ((args.package,'processed'),(args.captures,'interim'),(args.output,'review')):
         if not path.resolve().is_relative_to((DATA/kind).resolve()):
             parser.error(f'path must stay in research/data/{kind}')
+    if args.final_captures and not args.usage_candidates:
+        parser.error('--final-captures requires --usage-candidates')
     manifest = validate_research_pair(args.package)
     counts = {}
     combined = []
     with connect(args.package/'dictionary.sqlite','ro') as db:
         pages = {}
-        registry = USAGE_CAPTURES if args.usage_candidates else CAPTURES
+        registry = FINAL_USAGE_CAPTURES if args.final_captures else BASE_USAGE_CAPTURES if args.usage_candidates else CAPTURES
         for query,digest in registry.items():
             path = args.captures/f'{query}.json'
             if path.stat().st_size>256*1024 or checksum(path)!=digest:

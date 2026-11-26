@@ -12,15 +12,19 @@ public final class SearchNormalization {
     private SearchNormalization() {}
 
     public static String normalize(String text) {
-        text.codePoints().forEach(cp -> {
+        for (int i = 0; i < text.length();) {
+            int cp = text.codePointAt(i);
             if (cp == 0 || cp >= 0xD800 && cp <= 0xDFFF) {
                 throw new IllegalArgumentException("invalid scalar");
             }
-        });
+            i += Character.charCount(cp);
+        }
         String nfc = Normalizer.normalize(text, Normalizer.Form.NFC);
         String folded = Normalizer.normalize(UCharacter.foldCase(nfc, true), Normalizer.Form.NFC);
         String spaced = WHITESPACE.matcher(folded).replaceAll(" ");
-        return spaced.replaceAll("^ | $", "");
+        int start = spaced.startsWith(" ") ? 1 : 0;
+        int end = spaced.endsWith(" ") ? spaced.length()-1 : spaced.length();
+        return start < end ? spaced.substring(start,end) : "";
     }
 
     public static String prefixEnd(String prefix) {

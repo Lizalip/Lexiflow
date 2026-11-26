@@ -268,7 +268,7 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
     }
 
     private String validation(String manifestDigest,String databaseDigest) {
-        return "5\n" + (isResearchProfile(context) ? "research" : debug() ? "debug" : "apk") + "\n"
+        return "6\n" + (isResearchProfile(context) ? "research" : debug() ? "debug" : "apk") + "\n"
                 + android.os.Build.VERSION.SDK_INT + "\n" + android.os.Build.VERSION.INCREMENTAL + "\n"
                 + android.icu.lang.UCharacter.getUnicodeVersion() + "\n" + manifestDigest + "\n" + databaseDigest;
     }
@@ -320,11 +320,7 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
             if (candidate.schema()==3) {
                 checkIndexColumns(opened,"entry_language_search","entry","language","search_key","id");
                 checkIndexColumns(opened,"translation_language_search","translation","language","search_key","sense_id");
-                if (!"2".equals(scalar(opened,"SELECT count(DISTINCT language) FROM entry"))
-                        || !"0".equals(scalar(opened,"SELECT count(*) FROM translation t JOIN sense s ON s.id=t.sense_id"
-                        +" JOIN entry e ON e.id=s.entry_id WHERE t.language=e.language"
-                        +" OR t.language IS NULL OR e.language IS NULL"
-                        +" OR t.language NOT IN ('en','ru') OR e.language NOT IN ('en','ru')"))) {
+                if (!"2".equals(scalar(opened,"SELECT count(DISTINCT language) FROM entry"))) {
                     throw new SQLiteException("invalid bilingual direction");
                 }
                 for (var examples : candidate.usageExamples().entrySet()) {
@@ -361,34 +357,10 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
             for (String sql : probes) {
                 try (Cursor probe = opened.rawQuery(sql,null)) { probe.getColumnNames(); }
             }
-            boolean bilingual = candidate.schema()==3;
-            try (Cursor refs = opened.rawQuery("SELECT t.origin_attribution_id,t.attribution_id,s.attribution_id,e.attribution_id"
-                    + (bilingual ? ",e.language" : "")
-                    + " FROM translation t JOIN sense s ON s.id=t.sense_id JOIN entry e ON e.id=s.entry_id",null)) {
-                while (refs.moveToNext()) {
-                    var origin = candidate.attribution(refs.getString(0)).policy().source();
-                    if (bilingual) {
-                        String snapshot = "ru".equals(refs.getString(4))
-                                ? "9ab8e1a00c463f631e510899d20d26738b11af7b8cdddf8e44a396ba8349bfd5"
-                                : "f3dadcc29d7df6e77edb13b98a2ba2c3fac002852eddd8b557637f0b13d39c39";
-                        if (!snapshot.equals(origin.snapshot())) throw new JSONException("source does not own article language");
-                    }
-                    for (int i = 1; i < 4; i++) {
-                        var source = candidate.attribution(refs.getString(i)).policy().source();
-                        if (!origin.name().equals(source.name()) || !origin.snapshot().equals(source.snapshot())) {
-                            throw new JSONException("inconsistent translation provenance");
-                        }
-                    }
-                }
-            }
-            for (String sql : new String[]{"SELECT spelling,search_key FROM entry",
-                    "SELECT spelling,search_key FROM form","SELECT wording,search_key FROM translation"}) {
+            checkTranslations(opened,candidate);
+            for (String sql : new String[]{"SELECT spelling,search_key FROM entry","SELECT spelling,search_key FROM form"}) {
                 try (Cursor keys = opened.rawQuery(sql,null)) {
-                    while (keys.moveToNext()) {
-                        if (!SearchNormalization.normalize(keys.getString(0)).equals(keys.getString(1))) {
-                            throw new UnsupportedOperationException("package search keys differ from Android ICU");
-                        }
-                    }
+                    while (keys.moveToNext()) checkSearchKey(keys.getString(0),keys.getString(1));
                 }
             }
             if (candidate.count("entry") == 0 || candidate.count("translation") == 0
@@ -402,6 +374,41 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
         } catch (RuntimeException | JSONException failed) {
             opened.close();
             throw failed;
+        }
+    }
+
+    static void checkTranslations(SQLiteDatabase db,PackageManifest candidate) throws JSONException {
+        boolean bilingual = candidate.schema()==3;
+        try (Cursor rows = db.rawQuery("SELECT t.origin_attribution_id,t.attribution_id,s.attribution_id,e.attribution_id,"
+                + "t.wording,t.search_key" + (bilingual ? ",e.language,t.language" : "")
+                + " FROM translation t JOIN sense s ON s.id=t.sense_id JOIN entry e ON e.id=s.entry_id",null)) {
+            while (rows.moveToNext()) {
+                var origin = candidate.attribution(rows.getString(0)).policy().source();
+                if (bilingual) {
+                    String articleLanguage = rows.getString(6), translationLanguage = rows.getString(7);
+                    if (!LANGUAGES.contains(articleLanguage) || !LANGUAGES.contains(translationLanguage)
+                            || articleLanguage.equals(translationLanguage)) {
+                        throw new SQLiteException("invalid bilingual direction");
+                    }
+                    String snapshot = "ru".equals(articleLanguage)
+                            ? "9ab8e1a00c463f631e510899d20d26738b11af7b8cdddf8e44a396ba8349bfd5"
+                            : "f3dadcc29d7df6e77edb13b98a2ba2c3fac002852eddd8b557637f0b13d39c39";
+                    if (!snapshot.equals(origin.snapshot())) throw new JSONException("source does not own article language");
+                }
+                for (int i = 1; i < 4; i++) {
+                    var source = candidate.attribution(rows.getString(i)).policy().source();
+                    if (!origin.name().equals(source.name()) || !origin.snapshot().equals(source.snapshot())) {
+                        throw new JSONException("inconsistent translation provenance");
+                    }
+                }
+                checkSearchKey(rows.getString(4),rows.getString(5));
+            }
+        }
+    }
+
+    private static void checkSearchKey(String wording,String key) {
+        if (!SearchNormalization.normalize(wording).equals(key)) {
+            throw new UnsupportedOperationException("package search keys differ from Android ICU");
         }
     }
 

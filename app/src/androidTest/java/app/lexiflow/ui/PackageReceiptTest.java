@@ -67,8 +67,8 @@ public class PackageReceiptTest {
             byte[] prior = Files.readAllBytes(receipt);
             repository.close();
             String current = new String(Files.readAllBytes(receipt),StandardCharsets.UTF_8);
-            assertTrue(current.startsWith("5\n"));
-            Files.write(receipt,("4"+current.substring(1)).getBytes(StandardCharsets.UTF_8));
+            assertTrue(current.startsWith("6\n"));
+            Files.write(receipt,("5"+current.substring(1)).getBytes(StandardCharsets.UTF_8));
             repository.load();
             assertEquals(DictionaryRepository.Status.AVAILABLE,repository.status());
             assertEquals(current,new String(Files.readAllBytes(receipt),StandardCharsets.UTF_8));

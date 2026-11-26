@@ -31,6 +31,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.BiConsumer;
+import java.util.function.BooleanSupplier;
 
 /** Called on one background executor. SQLite connections always open read-only. */
 public final class LocalDictionaryRepository implements DictionaryRepository {
@@ -150,16 +151,10 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
         File databaseFile = new File(folder,"dictionary.sqlite");
         String databaseDigest = checkedDatabaseDigest(databaseFile);
         long started = System.nanoTime();
-        String expectedManifest = sha256(manifestFile,MAX_MANIFEST);
-        timed("manifest_digest",started);
-        started = System.nanoTime();
-        boolean verified = matchesReceipt(receipt(databaseFile),validation(expectedManifest,databaseDigest));
+        String expectedManifest = receiptManifest(receipt(databaseFile),databaseDigest);
         timed("receipt",started);
-        var parsed = readFileManifest(manifestFile,!verified);
-        // Bind reuse to the bytes consumed by the parser, even if the file changed after hashing.
-        if (verified && !expectedManifest.equals(parsed.digest())) {
-            throw new SQLiteException("manifest changed while opening verified package");
-        }
+        var parsed = readFileManifest(manifestFile,expectedManifest);
+        boolean verified = parsed.digest().equals(expectedManifest);
         accept(openValidated(databaseFile,parsed,databaseDigest,verified),parsed,folder);
         return manifestFile;
     }
@@ -232,7 +227,7 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
             long started = System.nanoTime();
             writeCandidate(json,jsonFile,MAX_MANIFEST);
             timed("manifest_copy",started);
-            var candidate = readFileManifest(jsonFile,true);
+            var candidate = readFileManifest(jsonFile,null);
             started = System.nanoTime();
             writeCandidate(db,dbFile,MAX_DATABASE);
             timed("sqlite_copy",started);
@@ -270,7 +265,7 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
     private String validation(String manifestDigest,String databaseDigest) {
         return "6\n" + (isResearchProfile(context) ? "research" : debug() ? "debug" : "apk") + "\n"
                 + android.os.Build.VERSION.SDK_INT + "\n" + android.os.Build.VERSION.INCREMENTAL + "\n"
-                + android.icu.lang.UCharacter.getUnicodeVersion() + "\n" + manifestDigest + "\n" + databaseDigest;
+                + android.icu.lang.UCharacter.getUnicodeVersion() + "\n";
     }
 
     private SQLiteDatabase openValidated(File file, ParsedManifest parsed, String databaseDigest, boolean verified)
@@ -295,6 +290,10 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
             started = System.nanoTime();
             if (!"ok".equals(scalar(opened,"PRAGMA integrity_check"))) throw new SQLiteException("integrity check");
             try (Cursor check = opened.rawQuery("PRAGMA foreign_key_check",null)) {
+        return validationPrefix()+manifestDigest+"\n"+databaseDigest;
+    }
+
+    private String validationPrefix() {
                 if (check.moveToFirst()) throw new SQLiteException("foreign key check");
             }
             timed("sqlite_integrity",started);
@@ -447,13 +446,19 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
         return new AtomicFile(new File(database.getParentFile(),"validation-receipt"));
     }
 
-    private static boolean matchesReceipt(AtomicFile receipt,String validation) {
+    private String receiptManifest(AtomicFile receipt,String databaseDigest) {
         try (InputStream input = receipt.openRead()) {
             ByteArrayOutputStream bytes = new ByteArrayOutputStream(256);
             transfer(input,bytes,2048);
-            return validation.equals(new String(bytes.toByteArray(),StandardCharsets.UTF_8));
+            String value = new String(bytes.toByteArray(),StandardCharsets.UTF_8);
+            String prefix = validationPrefix();
+            String suffix = "\n"+databaseDigest;
+            int digestEnd = prefix.length()+64;
+            if (value.length()!=digestEnd+suffix.length() || !value.startsWith(prefix)
+                    || !value.endsWith(suffix)) return null;
+            return value.substring(prefix.length(),digestEnd);
         } catch (IOException ignored) {
-            return false;
+            return null;
         }
     }
 
@@ -579,7 +584,7 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
         }
     }
 
-    private PackageManifest readManifest(InputStream input,boolean verifyAttributionIds) throws IOException, JSONException {
+    private PackageManifest readManifest(InputStream input,BooleanSupplier verifyAttributionIds) throws IOException, JSONException {
         InputStream bounded = new FilterInputStream(input) {
             private long remaining = MAX_MANIFEST;
 
@@ -605,13 +610,18 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
 
     private record ParsedManifest(PackageManifest manifest,String digest) {}
 
-    private ParsedManifest readFileManifest(File file,boolean verifyAttributionIds) throws IOException, JSONException {
+    private ParsedManifest readFileManifest(File file,String expectedDigest) throws IOException, JSONException {
         long started = System.nanoTime();
         MessageDigest digest = newDigest();
         try (InputStream json = new DigestInputStream(new FileInputStream(file),digest)) {
-            PackageManifest manifest = readManifest(json,verifyAttributionIds);
+            // Hash and parse once. A changed manifest still gets every canonical attribution check.
+            String[] consumedDigest = new String[1];
+            PackageManifest manifest = readManifest(json,() -> {
+                consumedDigest[0] = hexDigest(digest.digest());
+                return !consumedDigest[0].equals(expectedDigest);
+            });
             timed("manifest_with_digest",started);
-            return new ParsedManifest(manifest,hexDigest(digest.digest()));
+            return new ParsedManifest(manifest,consumedDigest[0]);
         }
     }
 

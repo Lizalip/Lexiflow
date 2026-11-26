@@ -17,6 +17,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.BiConsumer;
+import java.util.function.BooleanSupplier;
 import java.util.regex.Pattern;
 
 /** Compact links share immutable policies for the lifetime of the open package. */
@@ -98,10 +99,10 @@ record PackageManifest(int format, int schema, String version, String unicode, S
     record UsageExample(UsageSentence original,UsageSentence translation,String pos,String relationship,String token) {}
 
     static PackageManifest parse(Reader input) throws IOException, JSONException {
-        return parse(input,null,true);
+        return parse(input,null,() -> true);
     }
 
-    static PackageManifest parse(Reader input,BiConsumer<String,Long> timing,boolean verifyAttributionIds)
+    static PackageManifest parse(Reader input,BiConsumer<String,Long> timing,BooleanSupplier verifyAttributionIds)
             throws IOException, JSONException {
         long started = System.nanoTime();
         var reader = new JsonReader(input);
@@ -130,7 +131,8 @@ record PackageManifest(int format, int schema, String version, String unicode, S
             throw new JSONException("invalid modification table format");
         }
         started = System.nanoTime();
-        var attributions = decode(root,format,verifyAttributionIds,research);
+        // Resolve receipt reuse only after the reader has consumed the entire document.
+        var attributions = decode(root,format,verifyAttributionIds.getAsBoolean(),research);
         if (timing != null) timing.accept("attribution_decode_and_verify",System.nanoTime()-started);
         var contexts = new HashMap<String,ContextLink>();
         if (root.containsKey("sense_context")) {
@@ -314,6 +316,7 @@ record PackageManifest(int format, int schema, String version, String unicode, S
         return result;
     }
 
+    @SuppressWarnings("unchecked")
     private static Map<String,Attribution> decode(Map<String,Object> root,int format,boolean verifyAttributionIds,boolean research)
             throws JSONException {
         List<Policy> policies = new ArrayList<>();
@@ -344,13 +347,11 @@ record PackageManifest(int format, int schema, String version, String unicode, S
         }
         var used = new HashSet<Integer>();
         var sources = new HashSet<Source>();
-        Map<String,Object> rawEntries = object(root.get("attributions"));
-        Map<String,Attribution> entries = new HashMap<>(rawEntries.size()*4/3+1);
+        Map<String,Object> rawEntries = object(root.remove("attributions"));
         MessageDigest hash = verifyAttributionIds ? sha256() : null;
+        byte[] canonicalBytes = verifyAttributionIds ? new byte[4096] : null;
         StringBuilder canonical = new StringBuilder();
-        var rows = rawEntries.entrySet().iterator();
-        while (rows.hasNext()) {
-            var entry = rows.next();
+        for (var entry : rawEntries.entrySet()) {
             if (!SHA256.matcher(entry.getKey()).matches()) throw new JSONException("invalid attribution identifier");
             Attribution attribution;
             CanonicalPolicy encoded = null;
@@ -380,14 +381,13 @@ record PackageManifest(int format, int schema, String version, String unicode, S
             if (attribution.modification().startsWith(RESEARCH_POLICY+":") != research) {
                 throw new JSONException("inconsistent research attribution");
             }
-            if (verifyAttributionIds && !matchesId(hash,entry.getKey(),attribution,encoded,canonical)) {
+            if (verifyAttributionIds && !matchesId(hash,entry.getKey(),attribution,encoded,canonical,canonicalBytes)) {
                 throw new JSONException("attribution identifier mismatch");
             }
             sources.add(attribution.policy().source());
-            entries.put(entry.getKey(),attribution);
-            rows.remove();
+            entry.setValue(attribution);
         }
-        if (entries.isEmpty() || used.size() != policies.size() || usedModifications.size() != modifications.size()) {
+        if (rawEntries.isEmpty() || used.size() != policies.size() || usedModifications.size() != modifications.size()) {
             throw new JSONException("missing or unused attribution");
         }
         Set<Source> declared = new HashSet<>();
@@ -397,7 +397,8 @@ record PackageManifest(int format, int schema, String version, String unicode, S
                     requiredText(row.get(1)),https(row.get(2))))) throw new JSONException("invalid source list");
         }
         if (!sources.equals(declared)) throw new JSONException("inconsistent source list");
-        return entries;
+        // The parser owned the removed map, and every value has been replaced above.
+        return (Map<String,Attribution>) (Map<?,?>) rawEntries;
     }
 
     private static MessageDigest sha256() {
@@ -407,14 +408,20 @@ record PackageManifest(int format, int schema, String version, String unicode, S
 
     /** Matches Python json.dumps(record, sort_keys=True) with its default ASCII escaping. */
     private static boolean matchesId(MessageDigest hash,String id,Attribution record,
-                                     CanonicalPolicy encoded,StringBuilder canonical) {
+                                     CanonicalPolicy encoded,StringBuilder canonical,byte[] scratch) {
         canonical.setLength(0);
         if (encoded == null) appendPolicyPrefix(canonical,record.policy());
         else hash.update(encoded.prefix());
         quote(canonical,record.locator()).append(", \"modification\": ");
         quote(canonical,record.modification());
         if (encoded == null) appendPolicySuffix(canonical,record.policy());
-        hash.update(ascii(canonical));
+        int bytes = canonical.length();
+        if (bytes <= scratch.length) {
+            for (int i = 0; i < bytes; i++) scratch[i] = (byte) canonical.charAt(i);
+            hash.update(scratch,0,bytes);
+        } else {
+            hash.update(ascii(canonical));
+        }
         if (encoded != null) hash.update(encoded.suffix());
         byte[] digest = hash.digest();
         for (int i = 0; i < digest.length; i++) {
@@ -534,7 +541,8 @@ record PackageManifest(int format, int schema, String version, String unicode, S
                 yield value;
             }
             case BEGIN_ARRAY -> {
-                List<Object> value = new ArrayList<>();
+                // Most arrays in compact manifests hold three attribution fields.
+                List<Object> value = new ArrayList<>(4);
                 reader.beginArray();
                 while (reader.hasNext()) value.add(read(reader,depth+1));
                 reader.endArray();

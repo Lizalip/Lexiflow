@@ -2,7 +2,7 @@
 import argparse
 import json
 import re
-from collections import Counter
+from collections import Counter, defaultdict
 from pathlib import Path
 
 from prototype import normalize
@@ -76,26 +76,80 @@ def suggestions(db,search,capture):
                 pairs_with_unique_sense_hint=sum(len(row['candidate_sense_ids'])==1 for row in result)),result
 
 
+def usage_candidates(db,captures,manifest):
+    """Index bounded token phrases once, then return article-level candidates for review."""
+    keys = defaultdict(set)
+    for entry,key,pos in db.execute("SELECT id,search_key,pos FROM entry WHERE language='en'"):
+        if pos in ('n','v','adj','adv'):
+            keys[tuple(WORD.findall(key))].add((entry,pos,'lemma',key))
+    for entry,pos,key in db.execute("""SELECT DISTINCT e.id,e.pos,f.search_key FROM form f
+          JOIN entry e ON e.id=f.entry_id JOIN lexical_metadata m ON m.form_id=f.id
+          WHERE e.language='en' AND m.kind='grammar'"""):
+        keys[tuple(WORD.findall(key))].add((entry,pos,'form',key))
+    current = manifest.get('entry_usage_examples',{}).get('entries',{})
+    if manifest.get('entry_usage_examples',{}).get('version')==1:
+        current = {entry:[example] for entry,example in current.items()}
+    seen = {(entry,int(manifest['attributions'][row['en']['evidence']][1].split('/')[1]))
+            for entry,items in current.items() for row in items}
+    shortlisted = {}
+    stats = Counter()
+    for capture,document in sorted(captures.items()):
+        for en,ru in pairs(document):
+            stats['direct_pairs'] += 1
+            tokens = WORD.findall(normalize(en['text']))
+            if not 2<=len(tokens)<=20 or not en['text'].rstrip().endswith(('.', '?', '!')):
+                continue
+            for start in range(len(tokens)):
+                for end in range(start+1,min(start+5,len(tokens))+1):
+                    matches = keys.get(tuple(tokens[start:end]),())
+                    if len(matches)!=1:
+                        stats['ambiguous_tokens'] += bool(matches)
+                        continue
+                    entry,pos,relationship,key = next(iter(matches))
+                    identity = entry,en['id'],ru['id']
+                    if (entry,en['id']) in seen or identity in shortlisted or len(current.get(entry,[]))>=8:
+                        continue
+                    shortlisted[identity] = dict(entry=entry,pos=pos,relationship=relationship,token=key,
+                                                 original=en['id'],translation=ru['id'],capture=capture,
+                                                 english=en,russian=ru,word_count=len(tokens),
+                                                 existing_examples=len(current.get(entry,[])),
+                                                 status='requires preliminary lexical review')
+    candidates = sorted(shortlisted.values(),key=lambda row:(
+        row['existing_examples'],row['relationship']!='lemma',abs(row['word_count']-8),
+        -len(row['token'].split()),row['original'],row['translation'],row['entry']))
+    return dict(stats,candidates=len(candidates),candidate_articles=len({row['entry'] for row in candidates})),candidates
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('package',type=Path)
     parser.add_argument('captures',type=Path)
     parser.add_argument('output',type=Path)
+    parser.add_argument('--usage-candidates',action='store_true')
     args = parser.parse_args()
     for path,kind in ((args.package,'processed'),(args.captures,'interim'),(args.output,'review')):
         if not path.resolve().is_relative_to((DATA/kind).resolve()):
             parser.error(f'path must stay in research/data/{kind}')
-    validate_research_pair(args.package)
+    manifest = validate_research_pair(args.package)
     counts = {}
     combined = []
     with connect(args.package/'dictionary.sqlite','ro') as db:
-        for query,digest in CAPTURES.items():
+        pages = {}
+        registry = USAGE_CAPTURES if args.usage_candidates else CAPTURES
+        for query,digest in registry.items():
             path = args.captures/f'{query}.json'
             if path.stat().st_size>256*1024 or checksum(path)!=digest:
                 raise ValueError('unexpected Tatoeba capture')
             with path.open(encoding='utf-8') as stream:
-                counts[query],rows = suggestions(db,query,json.load(stream))
-            combined.extend(rows)
+                page = json.load(stream)
+            if args.usage_candidates:
+                pages[query] = page
+            else:
+                counts[query],rows = suggestions(db,query,page)
+                combined.extend(rows)
+        if args.usage_candidates:
+            metrics,combined = usage_candidates(db,pages,manifest)
+            counts['article_usage'] = metrics
     with args.output.open('x',encoding='utf-8',newline='\n') as stream:
         json.dump(combined,stream,ensure_ascii=False,indent=2)
         stream.write('\n')

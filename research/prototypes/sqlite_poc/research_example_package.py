@@ -58,11 +58,14 @@ def add_attributions(manifest,entry,snapshot,original,translation,relationship=(
 
 
 def add_curated_examples(manifest,db,decisions,captures):
-    if manifest['schema_version']!=3 or USAGE_EXTENSION in manifest or not 1<=len(decisions)<=1000:
+    extension = manifest.get(USAGE_EXTENSION,dict(version=2,entries={}))
+    if manifest['schema_version']!=3 or extension['version']!=2 or not 1<=len(decisions)<=1000:
         raise ValueError('expected a bilingual research package and a bounded decision list')
     required = {'entry','capture','original','translation','relationship','token','pos','reason'}
     selected = {}
-    used = set()
+    result = extension['entries'].copy()
+    used = {(entry,int(manifest['attributions'][row['en']['evidence']][1].split('/')[1]))
+            for entry,rows in result.items() for row in rows}
     for row in decisions:
         if (set(row)!=required or not isinstance(row['reason'],str) or not row['reason'].strip()):
             raise ValueError('example decision requires an explicit rationale and exact provenance')
@@ -80,17 +83,17 @@ def add_curated_examples(manifest,db,decisions,captures):
             raise ValueError('unrelated sentence')
         used.add((entry,identity[0]))
         selected.setdefault(entry,[]).append((relationship,capture,original,translation))
-    result = {}
     for entry,rows in selected.items():
-        if len(rows)>8:
+        existing = result.get(entry,[])
+        if len(rows)+len(existing)>8:
             raise ValueError('at most eight examples per article')
         # Rank only reviewed matches. Prefer the lemma and balanced standalone examples.
         rows.sort(key=lambda row:(row[0][1]!='lemma',abs(len(WORD.findall(row[2]['text']))-8),
                                   row[2]['id'],row[3]['id']))
-        result[entry] = [dict(add_attributions(manifest,entry,USAGE_CAPTURES[capture],en,ru,relationship),
+        result[entry] = existing + [dict(add_attributions(manifest,entry,USAGE_CAPTURES[capture],en,ru,relationship),
                               pos=relationship[0],relationship=relationship[1],token=relationship[2])
                          for relationship,capture,en,ru in rows]
-    manifest['corpus_version'] += '-usage-v2'
+    manifest['corpus_version'] += '-usage-expanded' if USAGE_EXTENSION in manifest else '-usage-v2'
     manifest[USAGE_EXTENSION] = dict(version=2,entries=result)
     return dict(articles=len(result),examples=sum(map(len,result.values())))
 

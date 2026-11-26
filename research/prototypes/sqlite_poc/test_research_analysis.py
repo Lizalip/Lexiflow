@@ -10,10 +10,34 @@ from research_corpus_audit import flags
 from research_evaluation import HOLDOUT, REFERENCE, probe_set, reference_at_cutoff, summarize
 from research_upgrade import differences
 from research_reverse_aliases import stress_key
-from research_tatoeba import pairs, token_phrase
+from research_tatoeba import pairs, token_phrase, usage_candidates
 
 
 class ResearchAnalysisTest(unittest.TestCase):
+    def test_usage_candidates_keep_phrases_and_attested_forms_and_defer_ambiguous_words(self):
+        def bilingual(identifier,text):
+            return dict(id=identifier,lang='eng',text=text,owner='fixture',license='CC BY 2.0 FR',
+                        is_unapproved=False,translations=[
+                dict(id=identifier+100,lang='rus',text='Тестовая строка.',owner='fixture',
+                     license='CC BY 2.0 FR',is_unapproved=False,is_direct=True)])
+
+        with sqlite3.connect(':memory:') as db:
+            db.executescript("""
+                CREATE TABLE entry(id,language,search_key,pos);
+                CREATE TABLE form(id,entry_id,search_key);
+                CREATE TABLE lexical_metadata(form_id,kind);
+                INSERT INTO entry VALUES ('a','en','train','n'),('b','en','train','v'),
+                    ('c','en','model','n'),('d','en','set the table','v');
+                INSERT INTO form VALUES (1,'c','models');
+                INSERT INTO lexical_metadata VALUES (1,'grammar');
+            """)
+            capture = {'data':[bilingual(1,'Set the table.'),bilingual(2,'These models train.'),
+                               bilingual(3,'Train now'),bilingual(4,'The train.')] }
+            stats,rows = usage_candidates(db,{'fixture':capture},{})
+            self.assertEqual({(row['entry'],row['relationship']) for row in rows},{('c','form'),('d','lemma')})
+            self.assertGreater(stats['ambiguous_tokens'],0)
+            self.assertTrue(all(row['status']=='requires preliminary lexical review' for row in rows))
+
     def test_tatoeba_retains_only_direct_attributed_pairs(self):
         def row(identifier,language):
             return dict(id=identifier,lang=language,text='fixture',owner='fixture-author',

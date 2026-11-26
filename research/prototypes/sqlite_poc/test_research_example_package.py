@@ -29,6 +29,15 @@ class ResearchUsageExampleTest(unittest.TestCase):
                                                   {'believe':capture}),dict(articles=1,examples=2))
             attrs = expand_attributions(manifest['policies'],manifest['attributions'],manifest['modifications'])
             validate_entry_usage(db,manifest['entry_usage_examples'],attrs)
+            initial = copy.deepcopy(manifest['entry_usage_examples']['entries']['fixture'])
+            with self.assertRaisesRegex(ValueError,'unique'):
+                add_curated_examples(manifest,db,[decision],{'believe':capture})
+            extra = {'data':[linked(61,62,'This sample helps.')]}
+            self.assertEqual(add_curated_examples(manifest,db,[dict(decision,original=61,translation=62)],
+                                                  {'believe':extra})['examples'],3)
+            self.assertEqual(manifest['entry_usage_examples']['entries']['fixture'][:2],initial)
+            validate_entry_usage(db,manifest['entry_usage_examples'],
+                                 expand_attributions(manifest['policies'],manifest['attributions'],manifest['modifications']))
             for rejected in ([decision,decision],[dict(decision,pos='v')],[dict(decision,original=31,translation=32)],
                              [dict(decision,original=41,translation=42)],[dict(decision,original=51,translation=52)]):
                 with self.assertRaises(ValueError):

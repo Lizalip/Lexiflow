@@ -51,6 +51,12 @@ FORM_CAPTURE = {
     'test':'e266e515a0a7547657ed3d90d9ba46487d6bd251f27ad4269d4e8a427c8555cd',
     'dev':'531a54ff90d6ab12201c5a50c3e78e6ddac4de69abc4bce5d275d3cd29efe2b6',
 }
+FORM_FEATURES = {
+    'v': {'Past','Past participle','Present participle','Gerund','Third-person singular'},
+    'n': {'Plural'},
+    'adj': {'Comparative','Superlative'},
+    'adv': {'Comparative','Superlative'},
+}
 
 
 def form_modification(key,pos,spelling,feature):
@@ -73,8 +79,7 @@ def validate_ud_forms(conn, attrs, schema):
         row = sources.get(ref,{})
         split = row.get('locator','').split('/')
         if (language!='en' or not re.fullmatch(r'[a-z]{1,40}',spelling) or search!=spelling or key==search
-                or ref!=metadata_ref or (pos,feature) not in
-                {('v','Past'),('v','Past participle'),('n','Plural'),('adj','Comparative'),('adv','Comparative')}
+                or ref!=metadata_ref or feature not in FORM_FEATURES.get(pos,())
                 or len(split)!=3 or FORM_CAPTURE.get(split[0])!=row.get('snapshot') or not split[1]
                 or not split[2].isdigit() or row.get('source_url')!=FORM_URL
                 or row.get('license_id')!='CC BY-SA 4.0' or row.get('terms_url')!=FORM_TERMS

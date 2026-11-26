@@ -6,7 +6,7 @@ param(
     [switch]$UpdateResearch,
     [switch]$Measure30000,
     [switch]$CheckRollback,
-    [ValidateSet('full','bilingual','bilingual-expansion','content')][string]$Advanced,
+    [ValidateSet('full','bilingual','bilingual-expansion','content','morphology')][string]$Advanced,
     [string]$DirectWord,
     [string]$AddedWord,
     [ValidateSet('10000','20000')][string]$RussianSize = '20000'
@@ -146,6 +146,13 @@ try {
     } elseif ($Advanced -eq 'content') {
         $initial = Build-Apk "$artifacts/research-scaling/bilingual-usage-pilot" 'usage-v1-isolated' -Tests
         $expanded = Build-Apk "$artifacts/research-scaling/bilingual-cefr-20000-content" 'content-isolated'
+    } elseif ($Advanced -eq 'morphology') {
+        $baseline = "$artifacts/research-scaling/bilingual-cefr-20000-content"
+        $candidate = "$artifacts/research-scaling/bilingual-cefr-20000-ud-expanded"
+        & $Python research/prototypes/sqlite_poc/research_upgrade.py $baseline $candidate --allow-enrichment |
+            Tee-Object -FilePath (Join-Path $run.FullName 'identity.json')
+        $initial = Build-Apk $baseline 'morphology-before' -Tests
+        $expanded = Build-Apk $candidate 'morphology-expanded'
     } else {
         $initial = Build-Apk $old '5000-isolated' -Tests
         $expanded = Build-Apk $new '20000-isolated'
@@ -183,6 +190,22 @@ try {
             Run-Test 'opensSeveralAttributedExamplesAndSearchesInflectedForms' 'content-usage-and-forms' @('-e','lexiflowEvidence','true')
             Save-AppFrame '13-attributed-usage'
             Save-AppFrame '14-grammatical-forms'
+        } elseif ($Advanced -eq 'morphology') {
+            $beforeVersion = 'research-bilingual-freedict-2025.11.23-20000-cefr-j-usage-v2-ud-forms'
+            $afterVersion = "$beforeVersion-ud-expanded"
+            $existing = @('-e','lexiflowDirectWord','дом')
+            Run-Test 'usesRealDictionaryAndPersistsPersonalData' 'morphology-english-seed'
+            Run-Test 'learnsAnIndependentRussianSenseAfterUpdatingEnglishCorpus' 'morphology-russian-seed' $existing
+            & $adb -s $serial install -r -t $expanded
+            Run-Test 'opensSeveralAttributedExamplesAndSearchesInflectedForms' 'morphology-forms' @(
+                '-e','lexiflowCorpus',$afterVersion,'-e','lexiflowEvidence','true')
+            Save-AppFrame '13-attributed-usage'
+            Save-AppFrame '14-grammatical-forms'
+            Run-Test 'readsBothLanguagesAfterRestartOrRollback' 'morphology-restart' ($existing+
+                @('-e','lexiflowCorpus',$afterVersion))
+            & $adb -s $serial install -r -t $initial
+            Run-Test 'readsBothLanguagesAfterRestartOrRollback' 'morphology-rollback' ($existing+
+                @('-e','lexiflowCorpus',$beforeVersion))
         } else {
         Run-Test 'usesRealDictionaryAndPersistsPersonalData' '5000-seed'
         Run-Test 'seedAdditionalUpgradeSaves' '5000-extra-saves'

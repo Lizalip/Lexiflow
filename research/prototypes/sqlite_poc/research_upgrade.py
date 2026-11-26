@@ -15,7 +15,7 @@ def differences(db, projection, table, owner, base_table):
                for left,right in ((before,after),(after,before)))
 
 
-def compare(before, after):
+def compare(before, after, *, allow_enrichment=False):
     early = validate_research_pair(before)
     late = validate_research_pair(after)
     if early['schema_version'] != late['schema_version'] or not set(map(tuple,early['sources'])) <= set(map(tuple,late['sources'])):
@@ -36,7 +36,15 @@ def compare(before, after):
         for extension in ('source_entry_notes','entry_cefr','entry_usage_examples'):
             prior = early.get(extension,{}).get('entries',{})
             offered = late.get(extension,{}).get('entries',{})
-            checks[extension] = sum(offered.get(key) != value for key,value in prior.items())
+            checks[extension] = sum(
+                not (offered.get(key)==value or allow_enrichment and extension=='entry_usage_examples'
+                     and isinstance(value,list) and all(row in offered.get(key,[]) for row in value))
+                for key,value in prior.items())
+        if allow_enrichment:
+            for table in ('form','lexical_metadata','example','example_translation'):
+                checks[table] = db.execute(
+                    f'SELECT count(*) FROM (SELECT * FROM main.{table} EXCEPT SELECT * FROM expanded.{table})'
+                ).fetchone()[0]
         counts = {}
         for schema,manifest in (('main',early),('expanded',late)):
             grouped = db.execute(f'SELECT language,count(DISTINCT search_key) FROM {schema}.entry GROUP BY language').fetchall() \
@@ -44,7 +52,8 @@ def compare(before, after):
             counts[schema] = dict(spellings=sum(count for _,count in grouped),headwords=dict(grouped),
                                   entries=manifest['counts']['entry'],senses=manifest['counts']['sense'],
                                   translations=manifest['counts']['translation'])
-    if any(checks.values()) or counts['expanded']['spellings'] <= counts['main']['spellings']:
+    growth = counts['expanded']['spellings'] - counts['main']['spellings']
+    if any(checks.values()) or growth < (0 if allow_enrichment else 1):
         raise ValueError(f'not a compatible expansion: {checks}')
     return dict(before=counts['main'],after=counts['expanded'],differences=checks,
                 preserved_attributions=len(early['attributions']),
@@ -56,10 +65,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('before',type=Path)
     parser.add_argument('after',type=Path)
+    parser.add_argument('--allow-enrichment',action='store_true')
     args = parser.parse_args()
     if not all(pair.resolve().is_relative_to((DATA/'processed').resolve()) for pair in (args.before,args.after)):
         parser.error('use local pairs under research/data/processed')
-    print(json.dumps(compare(args.before,args.after),indent=2))
+    print(json.dumps(compare(args.before,args.after,allow_enrichment=args.allow_enrichment),indent=2))
 
 
 if __name__ == '__main__':

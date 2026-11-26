@@ -341,8 +341,12 @@ public final class MainActivity extends AppCompatActivity {
         return switch (value) {
             case "Past" -> getString(R.string.grammar_past);
             case "Past participle" -> getString(R.string.grammar_past_participle);
+            case "Present participle" -> getString(R.string.grammar_present_participle);
+            case "Gerund" -> getString(R.string.grammar_gerund);
+            case "Third-person singular" -> getString(R.string.grammar_third_person_singular);
             case "Plural" -> getString(R.string.grammar_plural);
             case "Comparative" -> getString(R.string.grammar_comparative);
+            case "Superlative" -> getString(R.string.grammar_superlative);
             default -> value;
         };
     }

@@ -100,8 +100,12 @@
     <string name="metadata_grammar">Грамматика</string>
     <string name="grammar_past">прошедшее время</string>
     <string name="grammar_past_participle">причастие прошедшего времени</string>
+    <string name="grammar_present_participle">причастие настоящего времени</string>
+    <string name="grammar_gerund">герундий</string>
+    <string name="grammar_third_person_singular">третье лицо единственного числа</string>
     <string name="grammar_plural">множественное число</string>
     <string name="grammar_comparative">сравнительная степень</string>
+    <string name="grammar_superlative">превосходная степень</string>
     <string name="word_forms">Формы слова</string>
     <string name="metadata_line">%1$s · %2$s\n%3$s</string>
     <string name="personal_page_range">%1$d–%2$d из %3$d</string>

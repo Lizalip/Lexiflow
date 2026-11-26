@@ -3,7 +3,8 @@ import argparse
 import hashlib
 import json
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
+from contextlib import ExitStack
 from pathlib import Path
 from shutil import copyfile
 from tempfile import TemporaryDirectory
@@ -16,7 +17,7 @@ PROBES = set('went gone ran took taken wrote written children mice better worse 
 POS = {'VERB':'v','NOUN':'n','ADJ':'adj','ADV':'adv'}
 
 
-def annotations(lines):
+def annotations(lines,probes=PROBES):
     sentence = None
     for row in lines:
         if row.startswith('# sent_id = '):
@@ -29,36 +30,58 @@ def annotations(lines):
                 continue
             token, word, lemma, upos = cells[:4]
             word, lemma = word.lower(),lemma.lower()
-            if word not in PROBES or lemma==word or not re.fullmatch('[a-z]{1,40}',lemma) or upos not in POS:
+            if ((probes is not None and word not in probes) or lemma==word or upos not in POS
+                    or not all(re.fullmatch('[a-z]{1,40}',part) for part in (word,lemma))):
                 continue
             features = set(cells[5].split('|'))
-            if upos=='VERB' and 'Tense=Past' in features:
-                feature = {'VerbForm=Part':'Past participle','VerbForm=Fin':'Past'}
-                for label, value in feature.items():
-                    if label in features:
-                        yield lemma,POS[upos],word,value,f'{sentence}/{token}'
+            feature = None
+            if upos=='VERB':
+                for required,label in (
+                    ({'Tense=Past','VerbForm=Part'},'Past participle'),
+                    ({'Tense=Past','VerbForm=Fin'},'Past'),
+                    ({'Tense=Pres','VerbForm=Part'},'Present participle'),
+                    ({'VerbForm=Ger'},'Gerund'),
+                    ({'Tense=Pres','VerbForm=Fin','Person=3','Number=Sing'},'Third-person singular'),
+                ):
+                    if required<=features:
+                        feature = label
+                        break
             elif upos=='NOUN' and 'Number=Plur' in features:
-                yield lemma,POS[upos],word,'Plural',f'{sentence}/{token}'
-            elif upos in ('ADJ','ADV') and 'Degree=Cmp' in features:
-                yield lemma,POS[upos],word,'Comparative',f'{sentence}/{token}'
+                feature = 'Plural'
+            elif upos in ('ADJ','ADV'):
+                if 'Degree=Cmp' in features:
+                    feature = 'Comparative'
+                elif 'Degree=Sup' in features:
+                    feature = 'Superlative'
+            if feature:
+                yield lemma,POS[upos],word,feature,f'{sentence}/{token}'
 
 
-def add_forms(manifest,db,samples):
-    if manifest['schema_version']!=3 or any(source[0]==FORM_SOURCE for source in manifest['sources']):
-        raise ValueError('expected a bilingual base without UD forms')
-    grouped = defaultdict(list)
+def add_forms(manifest,db,samples,*,all_forms=False):
+    if manifest['schema_version']!=3:
+        raise ValueError('expected a bilingual base')
+    evidence = {}
     for split,lines in samples.items():
-        for lemma,pos,word,feature,locator in annotations(lines):
-            grouped[lemma,pos,word,feature].append((split,locator))
-    inserted = 0
-    included = set()
-    for (lemma,pos,word,feature),evidence in sorted(grouped.items()):
-        owners = db.execute("SELECT id FROM entry WHERE language='en' AND search_key=? AND pos=?",
-                            (lemma,pos)).fetchall()
-        if len(owners)!=1:
+        for lemma,pos,word,feature,locator in annotations(lines,None if all_forms else PROBES):
+            key = lemma,pos,word,feature
+            evidence[key] = min(evidence.get(key,(split,locator)),(split,locator))
+    owners = defaultdict(list)
+    for lemma,pos,owner in db.execute("SELECT search_key,pos,id FROM entry WHERE language='en'"):
+        owners[lemma,pos].append(owner)
+    current = set(db.execute("""SELECT f.entry_id,f.search_key,m.value FROM form f
+        JOIN lexical_metadata m ON m.form_id=f.id WHERE m.kind='grammar'"""))
+    seen_surfaces, seen_lemmas, links = set(),set(),set()
+    metrics = Counter()
+    categories = Counter()
+    for (lemma,pos,word,feature),(split,locator) in sorted(evidence.items()):
+        possible = owners[lemma,pos]
+        if len(possible)!=1:
+            metrics['ambiguous' if possible else 'no_owner'] += 1
             continue
-        owner = owners[0][0]
-        split, locator = min(evidence)
+        owner = possible[0]
+        if (owner,word,feature) in current:
+            metrics['preserved'] += 1
+            continue
         policy = dict(source=FORM_SOURCE,snapshot=FORM_CAPTURE[split],source_url=FORM_URL,
                       license_id='CC BY-SA 4.0',terms_url=FORM_TERMS,
                       attribution='UD English EWT r2.16 annotations · Stanford University · Silveira et al.')
@@ -76,15 +99,22 @@ def add_forms(manifest,db,samples):
                           (owner,word,word,ref)).lastrowid
         db.execute("""INSERT INTO lexical_metadata(form_id,kind,value,lang,attribution_id)
                       VALUES (?,'grammar',?,'en',?)""",(form,feature,ref))
-        included.add(word)
-        inserted += 1
-    if not inserted:
-        raise ValueError('no unambiguous forms')
+        seen_surfaces.add(word)
+        seen_lemmas.add(lemma)
+        links.add((word,owner))
+        categories[feature] += 1
+        metrics['inserted'] += 1
+    inserted = metrics['inserted']
     manifest['sources'].sort()
-    manifest['corpus_version'] += '-ud-forms'
+    manifest['corpus_version'] += '-ud-expanded' if all_forms else '-ud-forms'
     manifest['counts']['form'] += inserted
     manifest['counts']['lexical_metadata'] += inserted
-    return dict(forms=inserted,distinct_surfaces=len(included),uncovered=sorted(PROBES-included))
+    available = {word for word, in db.execute('SELECT DISTINCT search_key FROM form')}
+    return dict(forms=inserted,total_form_rows=manifest['counts']['form'],distinct_surfaces=len(seen_surfaces),
+                lemmas=len(seen_lemmas),form_to_entry_links=len(links),categories=dict(categories),
+                candidates=len(evidence),ambiguous_exclusions=metrics['ambiguous'],
+                no_owner=metrics['no_owner'],preserved_analyses=metrics['preserved'],
+                uncovered=sorted(PROBES-available))
 
 
 def main():
@@ -92,16 +122,15 @@ def main():
     parser.add_argument('base',type=Path)
     parser.add_argument('output',type=Path)
     parser.add_argument('sample_dir',type=Path)
+    parser.add_argument('--all',action='store_true',help='screen all attestations from the pinned splits')
     args = parser.parse_args()
     if (args.output.exists() or not all(path.resolve().is_relative_to((DATA/'processed').resolve())
             for path in (args.base,args.output)) or not args.sample_dir.resolve().is_relative_to((DATA/'interim').resolve())):
         parser.error('use fresh output and local research artifacts')
-    samples = {}
-    for split,digest in FORM_CAPTURE.items():
-        source = args.sample_dir/f'UD_English-EWT-r2.16-{split}.conllu'
-        if source.stat().st_size>2*1024**2 or checksum(source)!=digest:
+    samples = {split:args.sample_dir/f'UD_English-EWT-r2.16-{split}.conllu' for split in FORM_CAPTURE}
+    for split,source in samples.items():
+        if source.stat().st_size>2*1024**2 or checksum(source)!=FORM_CAPTURE[split]:
             raise ValueError('unexpected UD EWT snapshot')
-        samples[split] = source.read_text(encoding='utf-8').splitlines()
     manifest = validate_research_pair(args.base)
     with TemporaryDirectory(dir=args.output.parent) as temporary:
         candidate = Path(temporary)/'candidate'
@@ -109,7 +138,9 @@ def main():
         target = candidate/'dictionary.sqlite'
         copyfile(args.base/'dictionary.sqlite',target)
         with connect(target,'rw') as db:
-            stats = add_forms(manifest,db,samples)
+            with ExitStack() as captures:
+                streams = {split:captures.enter_context(path.open(encoding='utf-8')) for split,path in samples.items()}
+                stats = add_forms(manifest,db,streams,all_forms=args.all)
             db.commit()
         manifest['database_sha256'] = checksum(target)
         with (candidate/'manifest.json').open('w',encoding='utf-8',newline='\n') as stream:

@@ -312,10 +312,16 @@ public class RealResearchFlowTest {
     @Test public void opensSeveralAttributedExamplesAndSearchesInflectedForms() throws Exception {
         var target = InstrumentationRegistry.getInstrumentation().getTargetContext();
         assumeTrue("app.lexiflow.researchcheck".equals(target.getPackageName()));
+        String expected = InstrumentationRegistry.getArguments().getString("lexiflowCorpus");
+        long start = SystemClock.elapsedRealtime();
         try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
             awaitDictionary(scenario,state -> state.status()!=DictionaryRepository.Status.LOADING,"rich corpus opened",120);
             assertEquals(DictionaryRepository.Status.AVAILABLE,view(scenario).status());
-            assertTrue(view(scenario).corpusVersion().endsWith("-usage-v2-ud-forms"));
+            if (expected==null) assertTrue(view(scenario).corpusVersion().endsWith("-usage-v2-ud-forms"));
+            else {
+                assertEquals(expected,view(scenario).corpusVersion());
+                logCapacity(target,start);
+            }
             query("chance");
             awaitDictionary(scenario,state -> state.hits().stream().anyMatch(row ->
                     "chance".equals(row.spelling()) && "n".equals(row.pos())),"example owner available");
@@ -349,6 +355,21 @@ public class RealResearchFlowTest {
             onView(withText(containsString(target.getString(R.string.grammar_past))))
                     .perform(scrollTo()).check(matches(isDisplayed()));
             capture(scenario,"14-grammatical-forms");
+        }
+        if (expected!=null) {
+            measureRepository(target);
+            var dictionary = new LocalDictionaryRepository(target);
+            try {
+                dictionary.load();
+                measure("form",5,() -> assertTrue(dictionary.search("studying",false).stream()
+                        .anyMatch(row -> "study".equals(row.spelling()) && "studying".equals(row.matchedForm()))));
+                var displays = dictionary.search("thought",false);
+                assertEquals("thought",displays.get(0).spelling());
+                assertTrue(displays.stream().anyMatch(row -> "think".equals(row.spelling())
+                        && "thought".equals(row.matchedForm())));
+            } finally {
+                dictionary.close();
+            }
         }
     }
 

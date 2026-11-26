@@ -6,7 +6,7 @@ const controls = [...document.querySelectorAll("article")].map(article => ({
   reason: article.querySelector("textarea")
 }));
 const storageKey = "lexiflow-editor-v1:" + batch;
-const proposalKinds = new Set(["", "candidate_translation", "unsuitable"]);
+const proposalKinds = new Set(["", "candidate_translation", "unsuitable", "defer"]);
 
 function snapshot() {
   const rows = [];
@@ -67,12 +67,15 @@ function update(persist = false) {
   const state = element("state").value;
   const priority = element("priority").value;
   const assessment = element("assessment").value;
+  const pos = element("pos").value;
+  const severity = element("severity").value;
   const query = element("query").value.trim().toLocaleLowerCase();
   let visible = 0;
   const draft = snapshot();
   const drafted = new Set(draft.rows.map(row => row.index));
   controls.forEach(({article, text}, index) => {
     article.hidden = (priority && priority !== article.dataset.priority)
+      || (pos && pos !== article.dataset.pos) || (severity && severity !== article.dataset.severity)
       || (assessment === "corrections" && article.dataset.suggestion !== "true")
       || (assessment && assessment !== "corrections" && assessment !== article.dataset.category)
       || (state === "pending" && drafted.has(index)) || (state === "draft" && !drafted.has(index))
@@ -84,7 +87,8 @@ function update(persist = false) {
     section.hidden = !section.querySelector("article:not([hidden])");
   });
   element("counts").textContent = "Показано " + visible + " из " + controls.length
-    + " · с черновиком " + drafted.size + " · без черновика " + (controls.length - drafted.size);
+    + " · с черновиком " + drafted.size + " · отложено " + draft.rows.filter(row => row.kind === "defer").length
+    + " · без черновика " + (controls.length - drafted.size);
   if (persist) {
     try { localStorage.setItem(storageKey, JSON.stringify(draft)); }
     catch (_) { /* File URLs can disable localStorage. Explicit export still works. */ }
@@ -100,7 +104,7 @@ function download(content, filename) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-document.addEventListener("input", event => update(!["query", "priority", "assessment", "state", "open-draft"].includes(event.target.id)));
+document.addEventListener("input", event => update(!["query", "priority", "assessment", "state", "pos", "severity", "open-draft"].includes(event.target.id)));
 element("save-draft").onclick = () => download(JSON.stringify(snapshot(), null, 2), "lexiflow-review-session.json");
 element("open-draft").onchange = async event => {
   try {
@@ -123,7 +127,7 @@ element("export").onclick = () => {
   const lines = [];
   if (!reviewer) { feedback.textContent = "Введите имя редактора"; return; }
   for (const row of draft.rows) {
-    if (!row.kind) continue;
+    if (!row.kind || row.kind === "defer") continue;
     const reason = row.reason.trim();
     const proposed = row.kind === "candidate_translation" ? row.translation.trim() : null;
     if (!reason || proposed === "") {

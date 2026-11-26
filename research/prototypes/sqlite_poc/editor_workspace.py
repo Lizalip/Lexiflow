@@ -136,25 +136,41 @@ def write_html(path, rows):
         alternatives = ' · '.join(html.escape(value) for value in row.get('source_alternatives',[]))
         issues = ', '.join(html.escape(reason) for reason in row.get('issues',[]))
         category = row.get('assessment_category','')
-        assessment = html.escape(ASSESSMENT_GROUPS.get(category,'—')+' · '+row.get('assessment_reason',''))
+        label = row.get('assessment_label',ASSESSMENT_GROUPS.get(category,'—'))
+        assessment = html.escape(label+' · '+row.get('assessment_reason',''))
         suggestion = html.escape(row.get('preliminary_suggestion') or '—')
+        uncertainty = html.escape(row.get('assessment_uncertainty') or '—')
+        owner = html.escape(row.get('research_owner',''))
+        pos = html.escape(row['pos'] or '—',quote=True)
+        severity = html.escape(row.get('severity',''),quote=True)
         ipa = ' · '.join(html.escape(value) for value in row.get('source_ipa',[]))
         cards.append(f"""<article data-index="{index}" data-priority="{priority}" data-category="{html.escape(category)}"
- data-suggestion="{str(bool(row.get('preliminary_suggestion'))).lower()}"><h3>{html.escape(row['headword'])} ·
- {html.escape(row['pos'] or '—')}</h3><p>Исходный перевод: <strong>{candidate}</strong></p>{context}
+ data-pos="{pos}" data-severity="{severity}" data-suggestion="{str(bool(row.get('preliminary_suggestion'))).lower()}"><h3>{html.escape(row['headword'])} ·
+ {pos}</h3><p>Исходный перевод: <strong>{candidate}</strong></p>{context}
  <p><small>{detail}<br>Sense ID: {html.escape(row['sense_id'])}<br>{provenance}<br>
  Варианты: {alternatives or candidate}<br>IPA источника: {ipa or '—'}<br>Сигналы: {issues or '—'}</small></p>
- <p>Предварительная оценка: {assessment}<br>Предлагаемое уточнение: {suggestion}<br>
+ <p>Предварительная оценка: {assessment}<br>Неопределённость: {uncertainty}<br>Предлагаемое уточнение: {suggestion}<br>
+ {owner}<br>
  Одобрение контекста в этой очереди не фиксируется.</p>
  <label>Черновик решения <select><option value="">Ожидает решения</option>
- <option value="candidate_translation">Предложить перевод</option>
- <option value="unsuitable">Предложить отклонение</option></select></label>
+ <option value="candidate_translation">Принять формулировку как предложение</option>
+ <option value="unsuitable">Предложить отклонение</option>
+ <option value="defer">Отложить к дополнительной проверке</option></select></label>
  <label>Предлагаемый перевод <input maxlength="1000" value="{html.escape(row['candidate'],quote=True)}"></label>
  <label>Комментарий <textarea maxlength="2000"></textarea></label></article>""")
     if cards: cards.append('</section>')
     keys = [{key:row[key] for key in IDENTITY} for row in rows]
     embedded = json.dumps(keys,ensure_ascii=True).replace('<','\\u003c')
-    categories = ''.join(f'<option value="{code}">{label}</option>' for code,label in ASSESSMENT_GROUPS.items())
+    categories = {row['assessment_category']:row.get('assessment_label',
+                  ASSESSMENT_GROUPS.get(row['assessment_category'],row['assessment_category']))
+                  for row in rows if row.get('assessment_category')}
+    def options(values):
+        return ''.join(f'<option value="{html.escape(code,quote=True)}">{html.escape(label)}</option>'
+                       for code,label in sorted(values.items()))
+    parts = {row['pos'] or '—':row['pos'] or '—' for row in rows}
+    severities = {key:label for key,label in (
+        ('high','Высокая'),('medium','Средняя'),('low','Низкая'),('none','Нет сигнала'))
+        if any(row.get('severity')==key for row in rows)}
     with path.open('x',encoding='utf-8') as stream:
         stream.write("""<!doctype html><html lang="ru"><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'">
@@ -165,6 +181,8 @@ label{display:block;margin:.5rem 0}small{overflow-wrap:anywhere}textarea,input{m
 <label>Поиск <input id="query" type="search"></label>
 <label>Приоритет <select id="priority"><option value="">Все</option><option value="specialist">Сложные</option>
 <option value="standard">Стандартные</option><option value="exclude">Исключённые</option></select></label>
+<label>Часть речи <select id="pos"><option value="">Все</option><!-- parts --></select></label>
+<label>Тяжесть <select id="severity"><option value="">Все</option><!-- severities --></select></label>
 <label>Состояние <select id="state"><option value="">Все</option><option value="pending">Без предложения</option>
 <option value="draft">Есть черновик</option></select></label><p id="counts" role="status"></p>
 <label>Предварительная оценка <select id="assessment"><option value="">Все</option>
@@ -172,7 +190,8 @@ label{display:block;margin:.5rem 0}small{overflow-wrap:anywhere}textarea,input{m
 <label>Имя редактора <input id="reviewer" maxlength="200" required></label><button id="export">Скачать предложения JSONL</button>
 <button id="save-draft">Сохранить сессию</button>
 <label>Восстановить сессию <input type="file" id="open-draft" accept=".json"></label>
-<p id="feedback" role="status"></p>""".replace('<!-- categories -->',categories))
+<p id="feedback" role="status"></p>""".replace('<!-- categories -->',options(categories))
+                     .replace('<!-- parts -->',options(parts)).replace('<!-- severities -->',options(severities)))
         stream.write(''.join(cards))
         stream.write(f'<script type="application/json" id="identity">{embedded}</script>')
         batch = hashlib.sha256(embedded.encode()).hexdigest()

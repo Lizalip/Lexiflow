@@ -6,15 +6,11 @@ from collections import Counter
 from pathlib import Path
 
 from prototype import normalize
-from release_package import checksum, connect
+from release_package import USAGE_CAPTURES, checksum, connect
 from research_package import DATA, validate_research_pair
 from research_reverse_aliases import stress_key
 
-CAPTURES = {
-    'opened':'3efedbb13c62be14ef6794ba7e6b9ca283dd08f50a87edf99c5a7a4ca9d6e06a',
-    'believe':'0d4a2eaf2d2c45923a4dced2a2b5ebbd26003ee660a12ce0df8a0bf98f25299c',
-    'chance':'f4b0e574f5b9f8bee0e8e59b6e4e9c762db2dbbc05a4f02c60f63ad586690dd1',
-}
+CAPTURES = {key:USAGE_CAPTURES[key] for key in ('opened','believe','chance')}
 WORD = re.compile(r"[^\W_]+(?:['’-][^\W_]+)*")
 LICENSES = {'CC BY 2.0 FR':'https://creativecommons.org/licenses/by/2.0/fr/',
             'CC0 1.0':'https://creativecommons.org/publicdomain/zero/1.0/'}

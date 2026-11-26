@@ -6,7 +6,7 @@ param(
     [switch]$UpdateResearch,
     [switch]$Measure30000,
     [switch]$CheckRollback,
-    [ValidateSet('full','bilingual','bilingual-expansion')][string]$Advanced,
+    [ValidateSet('full','bilingual','bilingual-expansion','content')][string]$Advanced,
     [string]$DirectWord,
     [string]$AddedWord,
     [ValidateSet('10000','20000')][string]$RussianSize = '20000'
@@ -114,6 +114,23 @@ try {
         Write-Host "$label passed"
     }
 
+    function Save-AppFrame([string]$name) {
+        $info = [Diagnostics.ProcessStartInfo]::new($adb)
+        $info.UseShellExecute = $false
+        $info.RedirectStandardOutput = $true
+        foreach ($arg in @('-s',$serial,'exec-out','run-as',$tempApp,'cat',"cache/lexiflow-evidence/$name.png")) {
+            $info.ArgumentList.Add($arg)
+        }
+        $process = [Diagnostics.Process]::Start($info)
+        try {
+            $stream = [IO.File]::Open((Join-Path $run.FullName "$name.png"),[IO.FileMode]::CreateNew)
+            try { $process.StandardOutput.BaseStream.CopyTo($stream) }
+            finally { $stream.Dispose() }
+            $process.WaitForExit()
+            if ($process.ExitCode) { throw "Could not save app frame: $name" }
+        } finally { $process.Dispose() }
+    }
+
     if ($Advanced -eq 'full') {
         $initial = Build-Apk "$artifacts/research-scaling/full-v3" 'full-isolated' -Tests
     } elseif ($Advanced -eq 'bilingual') {
@@ -126,6 +143,9 @@ try {
             Tee-Object -FilePath (Join-Path $run.FullName 'identity.json')
         $initial = Build-Apk $baseline 'bilingual-5000-isolated' -Tests
         $expanded = Build-Apk $candidate "bilingual-$RussianSize-isolated"
+    } elseif ($Advanced -eq 'content') {
+        $initial = Build-Apk "$artifacts/research-scaling/bilingual-usage-pilot" 'usage-v1-isolated' -Tests
+        $expanded = Build-Apk "$artifacts/research-scaling/bilingual-cefr-20000-content" 'content-isolated'
     } else {
         $initial = Build-Apk $old '5000-isolated' -Tests
         $expanded = Build-Apk $new '20000-isolated'
@@ -157,6 +177,12 @@ try {
             & $adb -s $serial install -r -t $initial
             Run-Test 'readsBothLanguagesAfterRestartOrRollback' 'expansion-rollback' ($existing+$added+
                 @('-e','lexiflowCorpus','research-bilingual-freedict-2025.11.23-5000-cefr-j','-e','lexiflowRollback','true'))
+        } elseif ($Advanced -eq 'content') {
+            Run-Test 'displaysUsageExampleWithSeparateSentenceAndTranslationCredits' 'content-old-reader'
+            & $adb -s $serial install -r -t $expanded
+            Run-Test 'opensSeveralAttributedExamplesAndSearchesInflectedForms' 'content-usage-and-forms' @('-e','lexiflowEvidence','true')
+            Save-AppFrame '13-attributed-usage'
+            Save-AppFrame '14-grammatical-forms'
         } else {
         Run-Test 'usesRealDictionaryAndPersistsPersonalData' '5000-seed'
         Run-Test 'seedAdditionalUpgradeSaves' '5000-extra-saves'

@@ -23,11 +23,27 @@ import java.util.regex.Pattern;
 record PackageManifest(int format, int schema, String version, String unicode, String digest, boolean research,
                        Map<String,Object> counts, Map<String,Attribution> attributions,
                        Map<String,ContextLink> contexts,Map<String,List<EntryNote>> entryNotes,
-                       Map<String,List<CefrLabel>> entryCefr,Map<String,UsageExample> usageExamples) {
+                       Map<String,List<CefrLabel>> entryCefr,Map<String,List<UsageExample>> usageExamples) {
     static final String NORMALIZATION = "nfc-casefold-nfc-python-whitespace-v1";
     private static final String RESEARCH_POLICY = "research-local-v1";
     private static final String USAGE_EXTENSION = "entry_usage_examples";
     private static final String USAGE_SNAPSHOT = "f4b0e574f5b9f8bee0e8e59b6e4e9c762db2dbbc05a4f02c60f63ad586690dd1";
+    private static final Set<String> USAGE_CAPTURES = new HashSet<>(Arrays.asList(USAGE_SNAPSHOT,
+            "3efedbb13c62be14ef6794ba7e6b9ca283dd08f50a87edf99c5a7a4ca9d6e06a",
+            "0d4a2eaf2d2c45923a4dced2a2b5ebbd26003ee660a12ce0df8a0bf98f25299c",
+            "d4205fdda5c9f886d1fd4b8ea407079f1083fd5d4d757eeeb5b9c3d9a8c193c6",
+            "d7ce033bb3001c005f6b83ddf6dc3712403ad3a603586f9e5d5b92121dd52495",
+            "e2e2f17525a574aae6b4e1eb1b1232c63c80c47084c98aebda45aaaa54689889",
+            "11949eecdb309051f488c29f414f0302aae33f54143ab0efe1df5c1d1e381291",
+            "3bf2749e31d2abf623d5f439e8e530a5f7f118b03e3837c645c6524166777502",
+            "4c3c0c5deb9d0dd668c94a6b521f6de0969aeec9547a904ab50ebf86657fbcbe",
+            "3684f8db84530489c529d40f8c21c86caa851384c661c1e98e944d65124b4f36",
+            "bf66869fa1e9932bab6d072da34f84dd8946c2f0c1a6f701ebbb5001c9c041ae",
+            "45b6c7932938f6fdf28e57d1fb93179fe3e3da6b571618644637d4c98c1a0daa",
+            "2c5e49c6572a557d5c2e5eb535cb424fe6ca07f16cc18d609a157591d4eeaef8",
+            "3628089b14996fb5df66f70ac291c6220a8dcd1ad757535985ed4fc170548a00"));
+    private static final List<String> USAGE_POS = Arrays.asList("n","v","adj","adv");
+    private static final Pattern USAGE_WORD = Pattern.compile("[\\p{L}\\p{N}]+(?:['’-][\\p{L}\\p{N}]+)*");
     private static final Pattern SHA256 = Pattern.compile("[0-9a-f]{64}");
     private static final Set<String> POLICY_FIELDS = new HashSet<>(Arrays.asList(
             "source","snapshot","source_url","license_id","terms_url","attribution"));
@@ -79,7 +95,7 @@ record PackageManifest(int format, int schema, String version, String unicode, S
                     + "\nhttps://tatoeba.org/en/sentences/show/" + id + "\n" + evidence.policy().terms();
         }
     }
-    record UsageExample(UsageSentence original,UsageSentence translation) {}
+    record UsageExample(UsageSentence original,UsageSentence translation,String pos,String relationship,String token) {}
 
     static PackageManifest parse(Reader input) throws IOException, JSONException {
         return parse(input,null,true);
@@ -139,31 +155,76 @@ record PackageManifest(int format, int schema, String version, String unicode, S
                 decodeEntryCefr(root,attributions),decodeUsageExamples(root,attributions));
     }
 
-    private static Map<String,UsageExample> decodeUsageExamples(Map<String,Object> root,
+    private static Map<String,List<UsageExample>> decodeUsageExamples(Map<String,Object> root,
                 Map<String,Attribution> attributions) throws JSONException {
         if (!root.containsKey(USAGE_EXTENSION)) return java.util.Collections.emptyMap();
         var extension = object(root.get(USAGE_EXTENSION));
         var entries = object(extension.get("entries"));
-        if (extension.size()!=2 || integer(extension.get("version"))!=1 || entries.size()!=1) {
+        int version = integer(extension.get("version"));
+        if (extension.size()!=2 || (version!=1 && version!=2) || entries.isEmpty() || entries.size()>1000
+                || version==1 && entries.size()!=1) {
             throw new JSONException("invalid usage example extension");
         }
-        var row = entries.entrySet().iterator().next();
-        var pair = object(row.getValue());
-        if (pair.size()!=2) throw new JSONException("invalid usage example pair");
-        var original = decodeUsageSentence(pair.get("en"),"en",attributions);
-        var translation = decodeUsageSentence(pair.get("ru"),"ru",attributions);
-        String content = String.join("\n",row.getKey(),original.id(),translation.id(),original.text(),translation.text());
+        Map<String,List<UsageExample>> result = new HashMap<>();
+        for (var row : entries.entrySet()) {
+            var pairs = version==1 ? java.util.Collections.singletonList(row.getValue()) : array(row.getValue());
+            if (pairs.isEmpty() || pairs.size()>8) throw new JSONException("invalid usage example count");
+            List<UsageExample> examples = new ArrayList<>();
+            Set<String> used = new HashSet<>();
+            for (Object raw : pairs) {
+                var example = decodeUsagePair(row.getKey(),object(raw),version,attributions);
+                if (!used.add(example.original().id())) throw new JSONException("duplicate usage example");
+                examples.add(example);
+            }
+            result.put(row.getKey(),examples);
+        }
+        return result;
+    }
+
+    private static UsageExample decodeUsagePair(String owner,Map<String,Object> pair,int version,
+                Map<String,Attribution> attributions) throws JSONException {
+        if (pair.size()!=(version==1 ? 2 : 5)) throw new JSONException("invalid usage example pair");
+        var original = decodeUsageSentence(pair.get("en"),"en",version,attributions);
+        var translation = decodeUsageSentence(pair.get("ru"),"ru",version,attributions);
+        String pos = null, relationship = null, token = null;
+        List<String> identity = new ArrayList<>();
+        identity.add(owner);
+        if (version==2) {
+            pos = requiredText(pair.get("pos"));
+            relationship = requiredText(pair.get("relationship"));
+            token = requiredText(pair.get("token"));
+            if (!USAGE_POS.contains(pos) || (!"lemma".equals(relationship) && !"form".equals(relationship))
+                    || token.length()>80 || !token.equals(SearchNormalization.normalize(token))
+                    || !containsUsageToken(token,original.text())) throw new JSONException("invalid usage relationship");
+            identity.addAll(Arrays.asList(pos,relationship,token));
+        }
+        identity.addAll(Arrays.asList(original.id(),translation.id(),original.text(),translation.text()));
+        String content = String.join("\n",identity);
         var digest = sha256().digest(content.getBytes(StandardCharsets.UTF_8));
         var text = new StringBuilder(RESEARCH_POLICY+": entry usage ");
         for (byte value : digest) text.append(HEX[(value&255)>>>4]).append(HEX[value&15]);
-        if (original.id().equals(translation.id()) || !text.toString().equals(original.evidence().modification())
+        if (original.id().equals(translation.id())
+                || !original.evidence().policy().source().equals(translation.evidence().policy().source())
+                || !text.toString().equals(original.evidence().modification())
                 || !text.toString().equals(translation.evidence().modification())) {
             throw new JSONException("usage example owner or text changed");
         }
-        return java.util.Collections.singletonMap(row.getKey(),new UsageExample(original,translation));
+        return new UsageExample(original,translation,pos,relationship,token);
     }
 
-    private static UsageSentence decodeUsageSentence(Object row,String language,
+    private static boolean containsUsageToken(String token,String body) {
+        var needle = words(token);
+        return !needle.isEmpty() && java.util.Collections.indexOfSubList(words(SearchNormalization.normalize(body)),needle)>=0;
+    }
+
+    private static List<String> words(String text) {
+        List<String> result = new ArrayList<>();
+        var matches = USAGE_WORD.matcher(text);
+        while (matches.find()) result.add(matches.group());
+        return result;
+    }
+
+    private static UsageSentence decodeUsageSentence(Object row,String language,int version,
                 Map<String,Attribution> attributions) throws JSONException {
         var fields = object(row);
         String text = requiredText(fields.get("text"));
@@ -180,7 +241,8 @@ record PackageManifest(int format, int schema, String version, String unicode, S
             default -> "";
         };
         if (!locator.matches() || !"Tatoeba API v1".equals(policy.source().name())
-                || !USAGE_SNAPSHOT.equals(policy.source().snapshot()) || !"https://api.tatoeba.org/".equals(policy.source().url())
+                || !(version==1 ? USAGE_SNAPSHOT.equals(policy.source().snapshot()) : USAGE_CAPTURES.contains(policy.source().snapshot()))
+                || !"https://api.tatoeba.org/".equals(policy.source().url())
                 || !terms.equals(policy.terms()) || !policy.credit().startsWith("Tatoeba · ")
                 || policy.credit().substring("Tatoeba · ".length()).trim().isEmpty()) {
             throw new JSONException("invalid usage example attribution");

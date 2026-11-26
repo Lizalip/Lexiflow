@@ -13,7 +13,7 @@ public interface DictionaryRepository {
     }
     record Metadata(String kind,String value,String language,String form,String attribution) {}
     record Example(String body, String translation, String attribution) {}
-    record Form(String spelling,String attribution) {}
+    record Form(String spelling,String attribution,String grammar) {}
     record SenseContext(String text, String ownerLocator, String definitionLocator, String attribution) {}
     record Sense(String id, int position, List<String> translations, List<Example> examples, String attribution,
                  List<Metadata> metadata, SenseContext context) {}

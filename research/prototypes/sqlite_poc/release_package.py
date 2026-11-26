@@ -11,7 +11,7 @@ from uuid import UUID
 
 import identity
 from sense_context import apply_decisions, export_context, validate_context
-from prototype import NORMALIZATION_VERSION, integrity
+from prototype import NORMALIZATION_VERSION, integrity, normalize
 from review_queue import IDENTITY, initialize
 
 FORMAT = 1
@@ -24,11 +24,65 @@ CEFR_LICENSE = 'CEFR-J-Wordlist-1.6-attribution'
 USAGE_SOURCE = 'Tatoeba API v1'
 USAGE_URL = 'https://api.tatoeba.org/'
 USAGE_SNAPSHOT = 'f4b0e574f5b9f8bee0e8e59b6e4e9c762db2dbbc05a4f02c60f63ad586690dd1'
+USAGE_CAPTURES = {
+    'opened':'3efedbb13c62be14ef6794ba7e6b9ca283dd08f50a87edf99c5a7a4ca9d6e06a',
+    'believe':'0d4a2eaf2d2c45923a4dced2a2b5ebbd26003ee660a12ce0df8a0bf98f25299c',
+    'chance':USAGE_SNAPSHOT,
+    'content-book':'d4205fdda5c9f886d1fd4b8ea407079f1083fd5d4d757eeeb5b9c3d9a8c193c6',
+    'content-bread':'d7ce033bb3001c005f6b83ddf6dc3712403ad3a603586f9e5d5b92121dd52495',
+    'content-garden':'e2e2f17525a574aae6b4e1eb1b1232c63c80c47084c98aebda45aaaa54689889',
+    'content-house':'11949eecdb309051f488c29f414f0302aae33f54143ab0efe1df5c1d1e381291',
+    'content-learn':'3bf2749e31d2abf623d5f439e8e530a5f7f118b03e3837c645c6524166777502',
+    'content-read':'4c3c0c5deb9d0dd668c94a6b521f6de0969aeec9547a904ab50ebf86657fbcbe',
+    'content-school':'3684f8db84530489c529d40f8c21c86caa851384c661c1e98e944d65124b4f36',
+    'content-table':'bf66869fa1e9932bab6d072da34f84dd8946c2f0c1a6f701ebbb5001c9c041ae',
+    'content-water':'45b6c7932938f6fdf28e57d1fb93179fe3e3da6b571618644637d4c98c1a0daa',
+    'content-window':'2c5e49c6572a557d5c2e5eb535cb424fe6ca07f16cc18d609a157591d4eeaef8',
+    'content-write':'3628089b14996fb5df66f70ac291c6220a8dcd1ad757535985ed4fc170548a00',
+}
+USAGE_TOKEN = re.compile(r"[^\W_]+(?:['’-][^\W_]+)*")
 USAGE_LICENSES = {'CC BY 2.0 FR':'https://creativecommons.org/licenses/by/2.0/fr/',
                   'CC0 1.0':'https://creativecommons.org/publicdomain/zero/1.0/'}
 USAGE_EXTENSION = 'entry_usage_examples'
+FORM_SOURCE = 'UD English EWT r2.16'
+FORM_URL = 'https://github.com/UniversalDependencies/UD_English-EWT/tree/r2.16'
+FORM_TERMS = 'https://creativecommons.org/licenses/by-sa/4.0/'
+FORM_CAPTURE = {
+    'test':'e266e515a0a7547657ed3d90d9ba46487d6bd251f27ad4269d4e8a427c8555cd',
+    'dev':'531a54ff90d6ab12201c5a50c3e78e6ddac4de69abc4bce5d275d3cd29efe2b6',
+}
 
 
+def form_modification(key,pos,spelling,feature):
+    return f'{RESEARCH_POLICY}: UD form {key}/{pos}/{spelling}/{feature}'
+
+
+def validate_ud_forms(conn, attrs, schema):
+    sources = {key:row for key,row in attrs.items() if row['source']==FORM_SOURCE}
+    if not sources:
+        return
+    if schema!=3:
+        raise ValueError('UD form experiment requires bilingual SQLite')
+    used = set()
+    for key,pos,language,spelling,search,ref,feature,metadata_ref in conn.execute("""
+            SELECT e.search_key,e.pos,e.language,f.spelling,f.search_key,f.attribution_id,m.value,m.attribution_id
+            FROM form f JOIN entry e ON e.id=f.entry_id LEFT JOIN lexical_metadata m ON m.form_id=f.id
+    """):
+        if ref not in sources and metadata_ref not in sources:
+            continue
+        row = sources.get(ref,{})
+        split = row.get('locator','').split('/')
+        if (language!='en' or not re.fullmatch(r'[a-z]{1,40}',spelling) or search!=spelling or key==search
+                or ref!=metadata_ref or (pos,feature) not in
+                {('v','Past'),('v','Past participle'),('n','Plural'),('adj','Comparative'),('adv','Comparative')}
+                or len(split)!=3 or FORM_CAPTURE.get(split[0])!=row.get('snapshot') or not split[1]
+                or not split[2].isdigit() or row.get('source_url')!=FORM_URL
+                or row.get('license_id')!='CC BY-SA 4.0' or row.get('terms_url')!=FORM_TERMS
+                or row.get('modification')!=form_modification(key,pos,spelling,feature)):
+            raise ValueError('invalid UD form provenance')
+        used.add(ref)
+    if used!=sources.keys():
+        raise ValueError('orphan UD form provenance')
 def cefr_modification(lemma,pos):
     return f'{RESEARCH_POLICY}: CEFR-J lemma={lemma}; pos={pos}'
 DISTRIBUTION = """
@@ -533,24 +587,62 @@ def validate_package(package):
             if not research or version!=3 or package_format!=3:
                 raise ValueError('usage examples require bilingual research format 3')
             validate_entry_usage(conn,data[USAGE_EXTENSION],attrs)
+        validate_ud_forms(conn,attrs,version)
     return data
 
 
-def usage_modification(entry, original, translation, body, wording):
-    content = '\n'.join((entry,original,translation,body,wording))
+def usage_modification(entry, original, translation, body, wording, *, relationship=()):
+    content = '\n'.join((entry,*relationship,original,translation,body,wording))
     return RESEARCH_POLICY+': entry usage '+hashlib.sha256(content.encode()).hexdigest()
 
 
 def validate_entry_usage(conn,extension,attrs):
     if (not isinstance(extension,dict) or set(extension)!={'version','entries'}
-            or type(extension['version']) is not int or extension['version']!=1
-            or not isinstance(extension['entries'],dict) or len(extension['entries'])!=1):
+            or type(extension['version']) is not int or extension['version'] not in (1,2)
+            or not isinstance(extension['entries'],dict) or not 1<=len(extension['entries'])<=1000):
         raise ValueError('invalid usage example extension')
-    entry, pair = next(iter(extension['entries'].items()))
-    if (not conn.execute("SELECT 1 FROM entry WHERE language='en' AND id=? AND search_key='chance' AND pos='n'",
-                         (entry,)).fetchone() or not isinstance(pair,dict) or set(pair)!={'en','ru'}):
-        raise ValueError('invalid usage example owner')
+    v1 = extension['version']==1
+    if v1 and len(extension['entries'])!=1:
+        raise ValueError('invalid usage example extension')
+    used = set()
+    for entry, pairs in extension['entries'].items():
+        owner = conn.execute("SELECT search_key,pos FROM entry WHERE language='en' AND id=?", (entry,)).fetchone()
+        if not owner or v1 and owner!=('chance','n'):
+            raise ValueError('invalid usage example owner')
+        rows = [pairs] if v1 else pairs
+        if not isinstance(rows,list) or not 1<=len(rows)<=8:
+            raise ValueError('invalid usage example count')
+        for pair in rows:
+            ids = validate_usage_pair(conn,attrs,entry,owner,pair,v1)
+            if (entry,ids[0]) in used:
+                raise ValueError('duplicate source sentence on article')
+            used.add((entry,ids[0]))
+
+
+def usage_relationship(conn,entry,owner,row):
+    pos, relation, token = (row.get(key) for key in ('pos','relationship','token'))
+    if (pos!=owner[1] or pos not in ('n','v','adj','adv') or not isinstance(token,str) or not token
+            or normalize(token)!=token or len(token)>80):
+        raise ValueError('invalid usage example POS or token')
+    if relation=='lemma' and token==owner[0]:
+        return pos,relation,token
+    if (relation=='form' and token!=owner[0] and conn.execute(
+            'SELECT 1 FROM form WHERE entry_id=? AND search_key=?',(entry,token)).fetchone()):
+        return pos,relation,token
+    raise ValueError('example has no confirmed lexical relationship')
+
+
+def usage_token_matches(token,text):
+    needle, haystack = USAGE_TOKEN.findall(token),USAGE_TOKEN.findall(normalize(text))
+    return bool(needle) and any(haystack[i:i+len(needle)]==needle for i in range(len(haystack)-len(needle)+1))
+
+
+def validate_usage_pair(conn,attrs,entry,owner,pair,v1):
+    if not isinstance(pair,dict) or set(pair)!=({'en','ru'} if v1 else {'en','ru','pos','relationship','token'}):
+        raise ValueError('invalid usage example pair')
+    relationship = () if v1 else usage_relationship(conn,entry,owner,pair)
     ids, texts, modifications = [],[],[]
+    snapshots = set()
     for language in ('en','ru'):
         row = pair[language]
         if (not isinstance(row,dict) or set(row)!={'text','evidence'} or not isinstance(row['evidence'],str)
@@ -559,8 +651,8 @@ def validate_entry_usage(conn,extension,attrs):
             raise ValueError('invalid usage example sentence')
         record = attrs.get(row['evidence'],{})
         locator = re.fullmatch(r'sentences/([1-9][0-9]*)/'+language,record.get('locator',''))
-        if (not locator or (record.get('source'),record.get('snapshot'),record.get('source_url'))
-                != (USAGE_SOURCE,USAGE_SNAPSHOT,USAGE_URL)
+        if (not locator or record.get('source')!=USAGE_SOURCE or record.get('source_url')!=USAGE_URL
+                or record.get('snapshot') not in ([USAGE_SNAPSHOT] if v1 else USAGE_CAPTURES.values())
                 or record.get('license_id') not in USAGE_LICENSES
                 or record.get('terms_url')!=USAGE_LICENSES[record['license_id']]
                 or not record['attribution'].startswith('Tatoeba · ') or not record['attribution'][9:].strip()):
@@ -568,8 +660,13 @@ def validate_entry_usage(conn,extension,attrs):
         ids.append(locator[1])
         texts.append(row['text'])
         modifications.append(record['modification'])
-    if ids[0]==ids[1] or any(value!=usage_modification(entry,*ids,*texts) for value in modifications):
+        snapshots.add(record['snapshot'])
+    if (ids[0]==ids[1] or len(snapshots)!=1 or any(value!=usage_modification(entry,*ids,*texts,
+            relationship=relationship) for value in modifications)):
         raise ValueError('usage example text or owner changed')
+    if not v1 and not usage_token_matches(relationship[2],texts[0]):
+        raise ValueError('example does not contain confirmed token')
+    return ids
 
 
 def validate_entry_cefr(conn,extension,attrs,version):

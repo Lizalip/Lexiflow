@@ -284,7 +284,11 @@ public final class MainActivity extends AppCompatActivity {
         if (!entry.forms().isEmpty()) {
             TextView forms = (TextView)getLayoutInflater().inflate(R.layout.entry_forms,rows,false);
             var text = new StringBuilder(getString(R.string.word_forms));
-            for (var form : entry.forms()) text.append("\n").append(form.spelling()).append("\n").append(form.attribution());
+            for (var form : entry.forms()) {
+                text.append("\n").append(form.spelling());
+                if (form.grammar()!=null) text.append(" · ").append(localGrammar(form.grammar()));
+                text.append("\n").append(form.attribution());
+            }
             forms.setText(text);
             rows.addView(forms);
         }
@@ -331,6 +335,16 @@ public final class MainActivity extends AppCompatActivity {
 
     private static boolean primaryArticleMetadata(DictionaryRepository.Metadata value) {
         return "ipa".equals(value.kind()) || "pronunciation".equals(value.kind()) || "cefr".equals(value.kind());
+    }
+
+    private String localGrammar(String value) {
+        return switch (value) {
+            case "Past" -> getString(R.string.grammar_past);
+            case "Past participle" -> getString(R.string.grammar_past_participle);
+            case "Plural" -> getString(R.string.grammar_plural);
+            case "Comparative" -> getString(R.string.grammar_comparative);
+            default -> value;
+        };
     }
 
     private void addMetadata(LinearLayout rows,java.util.List<DictionaryRepository.Metadata> metadata,

@@ -259,7 +259,7 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
     }
 
     private String validation(String manifestDigest,String databaseDigest) {
-        return "4\n" + (isResearchProfile(context) ? "research" : debug() ? "debug" : "apk") + "\n"
+        return "5\n" + (isResearchProfile(context) ? "research" : debug() ? "debug" : "apk") + "\n"
                 + android.os.Build.VERSION.SDK_INT + "\n" + android.os.Build.VERSION.INCREMENTAL + "\n"
                 + android.icu.lang.UCharacter.getUnicodeVersion() + "\n" + manifestDigest + "\n" + databaseDigest;
     }
@@ -331,10 +331,13 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
                         +" OR t.language NOT IN ('en','ru') OR e.language NOT IN ('en','ru')"))) {
                     throw new SQLiteException("invalid bilingual direction");
                 }
-                for (String entryId : candidate.usageExamples().keySet()) {
-                    try (Cursor row = opened.rawQuery("SELECT id FROM entry WHERE id=?"
-                            +" AND language='en' AND search_key='chance' AND pos='n'",new String[]{entryId})) {
+                for (var examples : candidate.usageExamples().entrySet()) {
+                    String entryId = examples.getKey();
+                    try (Cursor row = opened.rawQuery("SELECT search_key,pos FROM entry WHERE id=?"
+                            +" AND language='en'",new String[]{entryId})) {
                         if (!row.moveToFirst()) throw new JSONException("invalid usage example owner");
+                        String key = row.getString(0), pos = row.getString(1);
+                        for (var example : examples.getValue()) checkUsageOwner(opened,entryId,key,pos,example);
                     }
                 }
             }
@@ -433,6 +436,21 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
     private static boolean validId(String value) {
         try { return value != null && UUID.fromString(value).toString().equals(value); }
         catch (IllegalArgumentException invalid) { return false; }
+    }
+
+    private static void checkUsageOwner(SQLiteDatabase db,String entryId,String key,String pos,
+                                        PackageManifest.UsageExample example) throws JSONException {
+        if (example.pos()==null && "chance".equals(key) && "n".equals(pos)) return;
+        if (example.pos()!=null && example.pos().equals(pos)) {
+            if ("lemma".equals(example.relationship()) && key.equals(example.token())) return;
+            if ("form".equals(example.relationship()) && !key.equals(example.token())) {
+                try (Cursor form = db.rawQuery("SELECT 1 FROM form WHERE entry_id=? AND search_key=?",
+                        new String[]{entryId,example.token()})) {
+                    if (form.moveToFirst()) return;
+                }
+            }
+        }
+        throw new JSONException("usage example has no compatible lexical owner");
     }
 
     private static void checkPersistentIds(SQLiteDatabase db,PackageManifest candidate) throws JSONException {
@@ -703,8 +721,12 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
                 }
             }
             Set<Form> forms = new java.util.LinkedHashSet<>();
-            try (Cursor rows = database.rawQuery("SELECT spelling,attribution_id FROM form WHERE entry_id=? ORDER BY id",new String[]{id})) {
-                while (rows.moveToNext()) forms.add(new Form(rows.getString(0),attribution(rows.getString(1))));
+            String formQuery = manifest.schema()==1
+                    ? "SELECT spelling,attribution_id,NULL FROM form WHERE entry_id=? ORDER BY id"
+                    : "SELECT f.spelling,f.attribution_id,m.value FROM form f"
+                        +" LEFT JOIN lexical_metadata m ON m.form_id=f.id WHERE f.entry_id=? ORDER BY f.id,m.id";
+            try (Cursor rows = database.rawQuery(formQuery,new String[]{id})) {
+                while (rows.moveToNext()) forms.add(new Form(rows.getString(0),attribution(rows.getString(1)),rows.getString(2)));
             }
             List<Metadata> entryMetadata = metadata(id,false);
             var notes = manifest.entryNotes().get(id);
@@ -722,8 +744,10 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
             }
             var usage = manifest.usageExamples().get(id);
             if (usage != null) {
-                entryMetadata.add(new Metadata("usage_example",usage.original().text()+"\n"+usage.translation().text(),
-                        "en",null,usage.original().credit()+"\n"+usage.translation().credit()));
+                for (var example : usage) {
+                    entryMetadata.add(new Metadata("usage_example",example.original().text()+"\n"+example.translation().text(),
+                            "en",null,example.original().credit()+"\n"+example.translation().credit()));
+                }
             }
             return new Entry(id,entry.getString(0),entry.getString(1),senses,attribution(entry.getString(2)),
                     entryMetadata,new ArrayList<>(forms),language);

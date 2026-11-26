@@ -309,6 +309,49 @@ public class RealResearchFlowTest {
         }
     }
 
+    @Test public void opensSeveralAttributedExamplesAndSearchesInflectedForms() throws Exception {
+        var target = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        assumeTrue("app.lexiflow.researchcheck".equals(target.getPackageName()));
+        try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
+            awaitDictionary(scenario,state -> state.status()!=DictionaryRepository.Status.LOADING,"rich corpus opened",120);
+            assertEquals(DictionaryRepository.Status.AVAILABLE,view(scenario).status());
+            assertTrue(view(scenario).corpusVersion().endsWith("-usage-v2-ud-forms"));
+            query("chance");
+            awaitDictionary(scenario,state -> state.hits().stream().anyMatch(row ->
+                    "chance".equals(row.spelling()) && "n".equals(row.pos())),"example owner available");
+            var hit = view(scenario).hits().stream().filter(row -> "chance".equals(row.spelling()) && "n".equals(row.pos()))
+                    .findFirst().orElseThrow();
+            onView(withText("chance · n · "+target.getString(R.string.sense_title,hit.position())
+                    +"\n"+TranslationDisplay.wording(hit.translation()))).perform(scrollTo(),click());
+            awaitDictionary(scenario,state -> state.entry()!=null,"rich article loaded");
+            var article = view(scenario).entry();
+            var usage = article.metadata().stream().filter(row -> "usage_example".equals(row.kind()))
+                    .collect(java.util.stream.Collectors.toList());
+            assertTrue(usage.size()>=2);
+            assertTrue(usage.stream().allMatch(example ->
+                    example.attribution().split("tatoeba.org/en/sentences/show/",-1).length==3));
+            assertTrue(article.senses().stream().allMatch(row -> row.examples().isEmpty()));
+            onView(withText(startsWith(target.getString(R.string.source_usage_example)+" · "+usage.get(0).value())))
+                    .perform(scrollTo()).check(matches(isDisplayed()));
+            capture(scenario,"13-attributed-usage");
+            back();
+            query("went");
+            awaitDictionary(scenario,state -> state.hits().stream().anyMatch(row ->
+                    "go".equals(row.spelling()) && "went".equals(row.matchedForm())),"inflected English query");
+            var found = view(scenario).hits().stream().filter(row -> "go".equals(row.spelling())
+                    && "went".equals(row.matchedForm())).findFirst().orElseThrow();
+            onView(withText("go · v · "+target.getString(R.string.sense_title,found.position())
+                    +"\n"+TranslationDisplay.wording(found.translation())+"\n"+target.getString(R.string.matched_form,"went")))
+                    .perform(scrollTo(),click());
+            awaitDictionary(scenario,state -> state.entry()!=null,"inflected search opened the lemma");
+            assertTrue(view(scenario).entry().forms().stream().anyMatch(row ->
+                    "went".equals(row.spelling()) && "Past".equals(row.grammar())));
+            onView(withText(containsString(target.getString(R.string.grammar_past))))
+                    .perform(scrollTo()).check(matches(isDisplayed()));
+            capture(scenario,"14-grammatical-forms");
+        }
+    }
+
     @Test public void readsBothLanguagesAfterRestartOrRollback() throws Exception {
         var args = InstrumentationRegistry.getArguments();
         String word = args.getString("lexiflowDirectWord");

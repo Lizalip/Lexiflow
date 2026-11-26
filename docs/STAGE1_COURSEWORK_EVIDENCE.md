@@ -76,3 +76,18 @@ python research/prototypes/sqlite_poc/research_russian_selection.py `
 Продолжена исходная выборка из 280 значений. К 75 предыдущим предварительным оценкам добавлено 205. В новых группах 107 значений получили оценку «правдоподобно», 61 требует контекста, 11 содержат признаки смешения значений, восемь слишком узки, четыре слишком широки, пять требуют проверки POS и четыре вызывают сомнение в смысловом соответствии. Отмечены два редких варианта, две проблемы представления и один нерешённый случай. Исходные UUID, снимки, локаторы и тексты сверены с выборкой. Все 280 строк ожидают человеческой редакторской проверки. Приоритетная локальная очередь находится в `research/data/review/overnight-20000/marathon-human-review-queue.json`.
 
 Локальные агрегаты для Jupyter называются `marathon-russian-selection-equal-budget.json`, `marathon-russian-form-summary.json`, `marathon-article-diagnostics.json` и `marathon-editorial-summary-final.csv`. Они находятся в `research/data/processed/research-scaling/jupyter`. Объём, проверка Samsung и условия ручной приёмки зафиксированы в паспорте кандидата. [Кандидат Research](STAGE1_RESEARCH_RC.md)
+## Диаграмма активации пакета
+
+```mermaid
+stateDiagram-v2
+    [*] --> Preparing
+    Preparing --> Verifying: подготовлен манифест
+    Verifying --> Activating: прошли SHA, схема и связи
+    Verifying --> Previous: проверка не прошла
+    Preparing --> Previous: чтение прервано
+    Activating --> Ready: атомарно записан указатель
+    Activating --> Previous: сохранён прежний указатель
+    Previous --> Ready: открыта проверенная пара
+```
+
+В ветке без прежней пары ошибка приводит к экрану недоступного словаря. Проверки редакторской выборки и артефакты для Jupyter описаны в сводке лексики. Статусы Samsung и Android 10 разделены в таблице приёмки. [Редактура и морфология](STAGE1_LEXICAL_QA.md) · [Матрица приёмки](STAGE1_FINAL_ACCEPTANCE.md)

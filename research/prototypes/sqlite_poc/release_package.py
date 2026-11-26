@@ -17,6 +17,14 @@ from review_queue import IDENTITY, initialize
 FORMAT = 1
 COMPACT_FORMAT = 2
 RESEARCH_POLICY = 'research-local-v1'
+CEFR_SOURCE = 'CEFR-J Wordlist 1.6'
+CEFR_SHA = 'c837d2c00ab8954ed8db48e79afd8ef37099570295fec36950dbf9322303a37a'
+CEFR_URL = 'https://www.cefr-j.org/download.html'
+CEFR_LICENSE = 'CEFR-J-Wordlist-1.6-attribution'
+
+
+def cefr_modification(lemma,pos):
+    return f'{RESEARCH_POLICY}: CEFR-J lemma={lemma}; pos={pos}'
 DISTRIBUTION = """
 PRAGMA user_version=1;
 CREATE TABLE entry(id TEXT PRIMARY KEY NOT NULL, spelling TEXT NOT NULL, pos TEXT, search_key TEXT NOT NULL, attribution_id TEXT NOT NULL);
@@ -466,7 +474,7 @@ def validate_package(package):
         if (data.get('distribution_policy') != RESEARCH_POLICY or not all(marked)
                 or version not in (2,3) or package_format not in (COMPACT_FORMAT,3)):
             raise ValueError('inconsistent research package markers')
-    elif 'distribution_policy' in data or 'source_entry_notes' in data or any(marked):
+    elif 'distribution_policy' in data or 'source_entry_notes' in data or 'entry_cefr' in data or any(marked):
         raise ValueError('inconsistent research package markers')
     if version == 3 and (not research or package_format!=3):
         raise ValueError('bilingual schema requires research format 3')
@@ -510,7 +518,35 @@ def validate_package(package):
             validate_context(conn,data['sense_context'],attrs)
         if 'source_entry_notes' in data:
             validate_entry_notes(conn,data['source_entry_notes'],attrs)
+        if 'entry_cefr' in data:
+            if package_format!=3:
+                raise ValueError('entry CEFR requires research format 3')
+            validate_entry_cefr(conn,data['entry_cefr'],attrs,version)
     return data
+
+
+def validate_entry_cefr(conn,extension,attrs,version):
+    if (not isinstance(extension,dict) or set(extension)!={'version','entries'}
+            or type(extension['version']) is not int or extension['version']!=1
+            or not isinstance(extension['entries'],dict) or not extension['entries']):
+        raise ValueError('invalid entry CEFR extension')
+    sql = 'SELECT search_key,pos FROM entry WHERE id=?' + (" AND language='en'" if version==3 else '')
+    for entry,labels in extension['entries'].items():
+        owner = conn.execute(sql,(entry,)).fetchone()
+        if not owner or not isinstance(labels,list) or not 1<=len(labels)<=16:
+            raise ValueError('invalid CEFR article owner')
+        used = set()
+        for row in labels:
+            if (not isinstance(row,dict) or set(row)!={'level','evidence'} or row['level'] not in ('A1','A2','B1','B2')
+                    or not isinstance(row['evidence'],str) or row['evidence'] in used):
+                raise ValueError('invalid CEFR label')
+            used.add(row['evidence'])
+            record = attrs.get(row['evidence'],{})
+            if ((record.get('source'),record.get('snapshot'),record.get('source_url'),record.get('license_id'),
+                 record.get('terms_url')) != (CEFR_SOURCE,CEFR_SHA,CEFR_URL,CEFR_LICENSE,CEFR_URL)
+                    or not re.fullmatch(r'ALL_sep/row/[1-9][0-9]*/'+row['level'],record['locator'])
+                    or record['modification']!=cefr_modification(*owner)):
+                raise ValueError('invalid CEFR provenance')
 
 
 def validate_entry_notes(conn, extension, attrs):

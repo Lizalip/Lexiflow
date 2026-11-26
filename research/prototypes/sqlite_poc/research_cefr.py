@@ -7,10 +7,10 @@ from pathlib import Path
 from zipfile import ZipFile
 
 from prototype import normalize
-from release_package import checksum, connect
+from release_package import CEFR_SHA, checksum, connect
 from research_package import DATA, validate_research_pair
 
-SNAPSHOT = 'c837d2c00ab8954ed8db48e79afd8ef37099570295fec36950dbf9322303a37a'
+SNAPSHOT = CEFR_SHA
 MEMBER = 'CEFR-J Wordlist Ver1.6.xlsx'
 LEVELS = {'A1','A2','B1','B2'}
 POS = {'noun':'n','verb':'v','adjective':'adj','adverb':'adv','determiner':'determiner',

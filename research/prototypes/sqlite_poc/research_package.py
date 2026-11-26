@@ -11,7 +11,8 @@ from uuid import NAMESPACE_URL, uuid5
 from candidate_rank import subtlex_frequency
 from corpus_enrichment import LICENSE, RUS_ENG_SHA, SOURCE, TERMS, URL
 from prototype import integrity, normalize
-from release_package import RESEARCH_POLICY, checksum, connect, validate_package, write_package
+from release_package import CEFR_LICENSE, CEFR_SHA, CEFR_SOURCE, CEFR_URL, RESEARCH_POLICY
+from release_package import checksum, connect, validate_package, write_package
 from sense_context import direct_child
 
 SNAPSHOT = 'f3dadcc29d7df6e77edb13b98a2ba2c3fac002852eddd8b557637f0b13d39c39'
@@ -183,9 +184,14 @@ def validate_research_pair(package):
         raise ValueError('research package must be a local file pair')
     result = validate_package(package)
     bilingual = result['schema_version']==3
-    expected = sorted([[SOURCE,snapshot,url] for snapshot,url in SOURCE_BY_LANGUAGE.values()]) if bilingual else [[SOURCE,SNAPSHOT,URL]]
-    if (result.get('distribution_policy') != RESEARCH_POLICY or result['sources'] != expected
-            or any(row.get('license_id') != LICENSE or row.get('terms_url') != TERMS for row in result['policies'])
+    expected = [[SOURCE,snapshot,url] for snapshot,url in SOURCE_BY_LANGUAGE.values()] if bilingual else [[SOURCE,SNAPSHOT,URL]]
+    policies = {(SOURCE,snapshot,url,LICENSE,TERMS) for _,snapshot,url in expected}
+    if 'entry_cefr' in result:
+        expected.append([CEFR_SOURCE,CEFR_SHA,CEFR_URL])
+        policies.add((CEFR_SOURCE,CEFR_SHA,CEFR_URL,CEFR_LICENSE,CEFR_URL))
+    if (result.get('distribution_policy') != RESEARCH_POLICY or result['sources'] != sorted(expected)
+            or any(tuple(row.get(key) for key in ('source','snapshot','source_url','license_id','terms_url'))
+                   not in policies for row in result['policies'])
             or result['counts']['example'] or result['counts']['example_translation'] or 'sense_context' in result):
         raise ValueError('package does not match the documented research source policy')
     if bilingual:

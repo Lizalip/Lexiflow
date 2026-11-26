@@ -414,6 +414,46 @@ public class RealResearchFlowTest {
         }
     }
 
+    @Test public void finalCandidateShowsNewAttributedUsageAndDirectRussianArticles() throws Exception {
+        var instrumentation = InstrumentationRegistry.getInstrumentation();
+        var args = InstrumentationRegistry.getArguments();
+        var target = instrumentation.getTargetContext();
+        String version = args.getString("lexiflowFinalCorpus");
+        assumeTrue("app.lexiflow.researchcheck".equals(target.getPackageName()) && version!=null);
+        try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
+            awaitDictionary(scenario,state -> state.status()!=DictionaryRepository.Status.LOADING,
+                    "final candidate ready",120);
+            assertEquals(DictionaryRepository.Status.AVAILABLE,view(scenario).status());
+            assertEquals(version,view(scenario).corpusVersion());
+            query("kitchen");
+            awaitDictionary(scenario,state -> state.hits().stream().anyMatch(row ->
+                    "kitchen".equals(row.spelling()) && "n".equals(row.pos())),"new example owner");
+            var hit = view(scenario).hits().stream().filter(row ->
+                    "kitchen".equals(row.spelling()) && "n".equals(row.pos())).findFirst().orElseThrow();
+            onView(withText("kitchen · n · "+target.getString(R.string.sense_title,hit.position())
+                    +"\n"+TranslationDisplay.wording(hit.translation()))).perform(scrollTo(),click());
+            awaitDictionary(scenario,state -> state.entry()!=null,"new example article");
+            var examples = view(scenario).entry().metadata().stream()
+                    .filter(row -> "usage_example".equals(row.kind()))
+                    .collect(java.util.stream.Collectors.toList());
+            assertTrue(examples.size()>=2);
+            for (var example : examples) {
+                assertEquals(3,example.attribution().split("tatoeba.org/en/sentences/show/",-1).length);
+                onView(withText(startsWith(target.getString(R.string.source_usage_example)+" · "+example.value())))
+                        .perform(scrollTo()).check(matches(isDisplayed()));
+            }
+            if (version.endsWith("-ru-supplement")) {
+                back();
+                onView(withId(R.id.direction)).perform(click());
+                query("который");
+                awaitDictionary(scenario,state -> state.hits().stream().anyMatch(row ->
+                        "который".equals(row.spelling()) && "ru".equals(row.language())),
+                        "new direct Russian article");
+                assertEquals("ru",view(scenario).hits().get(0).language());
+            }
+        }
+    }
+
     @Test public void readsBothLanguagesAfterRestartOrRollback() throws Exception {
         var args = InstrumentationRegistry.getArguments();
         String word = args.getString("lexiflowDirectWord");

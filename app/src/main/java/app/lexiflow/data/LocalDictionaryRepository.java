@@ -167,7 +167,10 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
     private boolean installBundledPackage(String path,File active) throws IOException, JSONException {
         if (active != null) {
             try (InputStream bundled = context.getAssets().open(path+"/manifest.json")) {
-                if (sha256(bundled).equals(openManifestDigest)) return true;
+                long started = System.nanoTime();
+                String digest = sha256(bundled);
+                timed("bundled_manifest_digest",started);
+                if (digest.equals(openManifestDigest)) return true;
             } catch (FileNotFoundException absent) {
                 return false;
             }
@@ -226,16 +229,22 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
         boolean activated = false;
         boolean pointerAttempted = false;
         try {
+            long started = System.nanoTime();
             writeCandidate(json,jsonFile,MAX_MANIFEST);
+            timed("manifest_copy",started);
             var candidate = readFileManifest(jsonFile,true);
+            started = System.nanoTime();
             writeCandidate(db,dbFile,MAX_DATABASE);
+            timed("sqlite_copy",started);
             candidateDb = openValidated(dbFile,candidate,checkedDatabaseDigest(dbFile),false);
             var state = new DictionaryPackageStore.State(folder.getName(),openFolder == null ? null : openFolder.getName());
+            started = System.nanoTime();
             pointerAttempted = true;
             DictionaryPackageStore.write(root,state);
             accept(candidateDb,candidate,folder);
             activated = true;
             DictionaryPackageStore.prune(root,state);
+            timed("atomic_activation",started);
         } finally {
             if (!activated) {
                 if (candidateDb != null) candidateDb.close();
@@ -283,10 +292,13 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
         try {
             if (opened.getVersion() != candidate.schema()) throw new UnsupportedOperationException("schema mismatch");
             if (verified) return opened;
+            started = System.nanoTime();
             if (!"ok".equals(scalar(opened,"PRAGMA integrity_check"))) throw new SQLiteException("integrity check");
             try (Cursor check = opened.rawQuery("PRAGMA foreign_key_check",null)) {
                 if (check.moveToFirst()) throw new SQLiteException("foreign key check");
             }
+            timed("sqlite_integrity",started);
+            started = System.nanoTime();
             for (String table : TABLES) checkTable(opened,candidate,table);
             for (var entry : candidate.contexts().entrySet()) {
                 try (Cursor row = opened.rawQuery("SELECT attribution_id FROM sense WHERE id=?",new String[]{entry.getKey()})) {
@@ -295,25 +307,9 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
                     }
                 }
             }
-            for (var entry : candidate.entryNotes().entrySet()) {
-                try (Cursor row = opened.rawQuery("SELECT attribution_id FROM entry WHERE id=?",new String[]{entry.getKey()})) {
-                    if (!row.moveToFirst()) throw new JSONException("missing source entry note owner");
-                    var origin = candidate.attribution(row.getString(0));
-                    for (var note : entry.getValue()) {
-                        if (!note.belongsTo(origin)) throw new JSONException("source entry note provenance mismatch");
-                    }
-                }
-            }
-            String englishOnly = candidate.schema()==3 ? " AND language='en'" : "";
-            for (var entry : candidate.entryCefr().entrySet()) {
-                try (Cursor row = opened.rawQuery("SELECT search_key,pos FROM entry WHERE id=?"+englishOnly,
-                        new String[]{entry.getKey()})) {
-                    if (!row.moveToFirst()) throw new JSONException("missing CEFR owner");
-                    for (var label : entry.getValue()) {
-                        if (!label.belongsTo(row.getString(0),row.getString(1))) throw new JSONException("invalid CEFR owner");
-                    }
-                }
-            }
+            checkAttributedEntries(opened,candidate);
+            timed("attributed_metadata",started);
+            started = System.nanoTime();
             if (candidate.schema() >= 2) {
                 checkMetadata(opened,candidate);
                 checkIndexColumns(opened,"translation_preview","translation","sense_id","search_key","wording");
@@ -401,11 +397,43 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
                     || !"0".equals(scalar(opened,"SELECT count(*) FROM entry e WHERE NOT EXISTS "
                     + "(SELECT 1 FROM sense s WHERE s.entry_id=e.id)"))) throw new SQLiteException("empty or incomplete corpus");
             writeReceipt(receipt(file),validation(parsed.digest(),databaseDigest));
+            timed("package_relationships_and_keys",started);
             return opened;
         } catch (RuntimeException | JSONException failed) {
             opened.close();
             throw failed;
         }
+    }
+
+    static void checkAttributedEntries(SQLiteDatabase db,PackageManifest candidate) throws JSONException {
+        var notes = candidate.entryNotes();
+        var labels = candidate.entryCefr();
+        if (notes.isEmpty() && labels.isEmpty()) return;
+        int noteOwners = 0, labelOwners = 0;
+        String language = candidate.schema()==3 ? "language" : "'en'";
+        try (Cursor row = db.rawQuery("SELECT id,attribution_id,search_key,pos,"+language+" FROM entry",null)) {
+            while (row.moveToNext()) {
+                String entryId = row.getString(0);
+                var entryNotes = notes.get(entryId);
+                if (entryNotes!=null) {
+                    noteOwners++;
+                    var origin = candidate.attribution(row.getString(1));
+                    for (var note : entryNotes) {
+                        if (!note.belongsTo(origin)) throw new JSONException("source entry note provenance mismatch");
+                    }
+                }
+                var entryLabels = labels.get(entryId);
+                if (entryLabels!=null && "en".equals(row.getString(4))) {
+                    labelOwners++;
+                    String key = row.getString(2), pos = row.getString(3);
+                    for (var label : entryLabels) {
+                        if (!label.belongsTo(key,pos)) throw new JSONException("invalid CEFR owner");
+                    }
+                }
+            }
+        }
+        if (noteOwners!=notes.size()) throw new JSONException("missing source entry note owner");
+        if (labelOwners!=labels.size()) throw new JSONException("missing CEFR owner");
     }
 
     private static AtomicFile receipt(File database) {

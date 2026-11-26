@@ -1,6 +1,8 @@
 package app.lexiflow.data;
 
+import android.database.sqlite.SQLiteDatabase;
 import java.io.StringReader;
+import java.util.Collections;
 import org.json.JSONException;
 import org.junit.Test;
 import static org.junit.Assert.*;
@@ -44,5 +46,30 @@ public class AdvancedManifestTest {
         }
         assertThrows(UnsupportedOperationException.class,() ->
                 PackageManifest.parse(new StringReader(fixture().replace("\"package_format\":3","\"package_format\":4"))));
+    }
+
+    @Test public void scannedMetadataRejectsMissingAndWrongLanguageOwners() throws Exception {
+        var base = PackageManifest.parse(new StringReader(fixture()));
+        var origin = base.attribution(ID);
+        var note = new PackageManifest.EntryNote("fixture definition",
+                new PackageManifest.Attribution(origin.policy(),"entry/1/sense/0/sense/0/def/0",MOD));
+        var label = new PackageManifest.CefrLabel("A1",new PackageManifest.Attribution(origin.policy(),
+                "fixture","research-local-v1: CEFR-J lemma=fixture; pos=n"));
+        var manifest = new PackageManifest(3,3,base.version(),base.unicode(),base.digest(),true,
+                base.counts(),base.attributions(),Collections.emptyMap(),
+                Collections.singletonMap("note-owner",Collections.singletonList(note)),
+                Collections.singletonMap("level-owner",Collections.singletonList(label)),Collections.emptyMap());
+        try (var db = SQLiteDatabase.create(null)) {
+            db.execSQL("CREATE TABLE entry(id TEXT PRIMARY KEY,attribution_id TEXT,search_key TEXT,pos TEXT,language TEXT)");
+            for (String id : new String[]{"note-owner","level-owner"}) {
+                db.execSQL("INSERT INTO entry VALUES (?,?,'fixture','n','en')",new Object[]{id,ID});
+            }
+            LocalDictionaryRepository.checkAttributedEntries(db,manifest);
+            db.execSQL("UPDATE entry SET language='ru' WHERE id='level-owner'");
+            assertThrows(JSONException.class,() -> LocalDictionaryRepository.checkAttributedEntries(db,manifest));
+            db.execSQL("UPDATE entry SET language='en' WHERE id='level-owner'");
+            db.execSQL("DELETE FROM entry WHERE id='note-owner'");
+            assertThrows(JSONException.class,() -> LocalDictionaryRepository.checkAttributedEntries(db,manifest));
+        }
     }
 }

@@ -367,6 +367,12 @@ public class RealResearchFlowTest {
                 assertEquals("thought",displays.get(0).spelling());
                 assertTrue(displays.stream().anyMatch(row -> "think".equals(row.spelling())
                         && "thought".equals(row.matchedForm())));
+                if ("true".equals(InstrumentationRegistry.getArguments().getString("lexiflowUsageExpanded"))) {
+                    var sell = dictionary.search("sell",false).stream().filter(row ->
+                            "sell".equals(row.spelling()) && "v".equals(row.pos())).findFirst().orElseThrow();
+                    assertTrue(dictionary.entry(sell.entryId()).metadata().stream().anyMatch(row ->
+                            "usage_example".equals(row.kind()) && row.attribution().contains("Tatoeba")));
+                }
             } finally {
                 dictionary.close();
             }
@@ -382,8 +388,14 @@ public class RealResearchFlowTest {
         String added = args.getString("lexiflowAddedWord");
         String expectedVersion = args.getString("lexiflowCorpus");
         try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
-            awaitAvailable(scenario);
-            if (expectedVersion!=null) assertEquals(expectedVersion,view(scenario).corpusVersion());
+            if (expectedVersion==null) {
+                awaitAvailable(scenario);
+            } else {
+                awaitDictionary(scenario,state -> state.status()!=DictionaryRepository.Status.LOADING,
+                        "large package load finished",120);
+                assertEquals(DictionaryRepository.Status.AVAILABLE,view(scenario).status());
+                assertEquals(expectedVersion,view(scenario).corpusVersion());
+            }
             onView(withId(R.id.vocabulary)).perform(click());
             await(scenario,state -> state.savedCount()==(added==null ? 2 : 3) && state.saved().stream().anyMatch(row ->
                     word.equals(row.spelling) && "Local trial note".equals(row.note)

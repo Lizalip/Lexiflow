@@ -9,6 +9,8 @@ param(
     [ValidateSet('full','bilingual','bilingual-expansion','content','morphology')][string]$Advanced,
     [string]$DirectWord,
     [string]$AddedWord,
+    [switch]$LexicalScale,
+    [switch]$ProfileOnly,
     [ValidateSet('10000','20000')][string]$RussianSize = '20000'
 )
 
@@ -22,6 +24,9 @@ if ($Advanced -like 'bilingual*' -and !$DirectWord) {
 }
 if ($Advanced -eq 'bilingual-expansion' -and !$AddedWord) {
     throw 'Supply an exact Russian headword available only after expansion.'
+}
+if (($LexicalScale -or $ProfileOnly) -and $Advanced -ne 'morphology') {
+    throw 'LexicalScale and ProfileOnly are available in the isolated morphology workflow.'
 }
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $adb = Join-Path $Sdk 'platform-tools/adb.exe'
@@ -102,9 +107,9 @@ try {
         return $file
     }
 
-    function Run-Test($method,$label,[string[]]$extras=@()) {
+    function Run-Test($method,$label,[string[]]$extras=@(),[string]$testClass=$test) {
         & $adb -s $serial shell am force-stop $tempApp
-        $instrument = @('-s',$serial,'shell','am','instrument','-w','-r','-e','class',"$test#$method")
+        $instrument = @('-s',$serial,'shell','am','instrument','-w','-r','-e','class',"$testClass#$method")
         $instrument += $extras
         $instrument += "$tempApp.test/androidx.test.runner.AndroidJUnitRunner"
         $lines = @(& $adb @instrument)
@@ -148,7 +153,8 @@ try {
         $expanded = Build-Apk "$artifacts/research-scaling/bilingual-cefr-20000-content" 'content-isolated'
     } elseif ($Advanced -eq 'morphology') {
         $baseline = "$artifacts/research-scaling/bilingual-cefr-20000-content"
-        $candidate = "$artifacts/research-scaling/bilingual-cefr-20000-ud-expanded"
+        $candidateName = if ($LexicalScale) {'lexical-scale'} else {'ud-expanded'}
+        $candidate = "$artifacts/research-scaling/bilingual-cefr-20000-$candidateName"
         & $Python research/prototypes/sqlite_poc/research_upgrade.py $baseline $candidate --allow-enrichment |
             Tee-Object -FilePath (Join-Path $run.FullName 'identity.json')
         $initial = Build-Apk $baseline 'morphology-before' -Tests
@@ -193,19 +199,33 @@ try {
         } elseif ($Advanced -eq 'morphology') {
             $beforeVersion = 'research-bilingual-freedict-2025.11.23-20000-cefr-j-usage-v2-ud-forms'
             $afterVersion = "$beforeVersion-ud-expanded"
+            if ($LexicalScale) { $afterVersion += '-usage-expanded' }
             $existing = @('-e','lexiflowDirectWord','дом')
-            Run-Test 'usesRealDictionaryAndPersistsPersonalData' 'morphology-english-seed'
-            Run-Test 'learnsAnIndependentRussianSenseAfterUpdatingEnglishCorpus' 'morphology-russian-seed' $existing
+            $profileClass = 'app.lexiflow.data.ResearchActivationProfileTest'
+            if ($ProfileOnly) {
+                Run-Test 'measuresInitialActivationAndReopenSeparately' 'morphology-baseline-activation' @(
+                    '-e','lexiflowCorpus',$beforeVersion) $profileClass
+            } else {
+                Run-Test 'usesRealDictionaryAndPersistsPersonalData' 'morphology-english-seed'
+                Run-Test 'learnsAnIndependentRussianSenseAfterUpdatingEnglishCorpus' 'morphology-russian-seed' $existing
+            }
             & $adb -s $serial install -r -t $expanded
-            Run-Test 'opensSeveralAttributedExamplesAndSearchesInflectedForms' 'morphology-forms' @(
-                '-e','lexiflowCorpus',$afterVersion,'-e','lexiflowEvidence','true')
-            Save-AppFrame '13-attributed-usage'
-            Save-AppFrame '14-grammatical-forms'
-            Run-Test 'readsBothLanguagesAfterRestartOrRollback' 'morphology-restart' ($existing+
-                @('-e','lexiflowCorpus',$afterVersion))
-            & $adb -s $serial install -r -t $initial
-            Run-Test 'readsBothLanguagesAfterRestartOrRollback' 'morphology-rollback' ($existing+
-                @('-e','lexiflowCorpus',$beforeVersion))
+            Run-Test 'measuresInitialActivationAndReopenSeparately' 'morphology-activation' @(
+                '-e','lexiflowCorpus',$afterVersion) $profileClass
+            if ($ProfileOnly) {
+                Run-Test 'scannedMetadataRejectsMissingAndWrongLanguageOwners' 'morphology-attribution-rejection' @() 'app.lexiflow.data.AdvancedManifestTest'
+            } else {
+                $formArgs = @('-e','lexiflowCorpus',$afterVersion,'-e','lexiflowEvidence','true')
+                if ($LexicalScale) { $formArgs += @('-e','lexiflowUsageExpanded','true') }
+                Run-Test 'opensSeveralAttributedExamplesAndSearchesInflectedForms' 'morphology-forms' $formArgs
+                Save-AppFrame '13-attributed-usage'
+                Save-AppFrame '14-grammatical-forms'
+                Run-Test 'readsBothLanguagesAfterRestartOrRollback' 'morphology-restart' ($existing+
+                    @('-e','lexiflowCorpus',$afterVersion))
+                & $adb -s $serial install -r -t $initial
+                Run-Test 'readsBothLanguagesAfterRestartOrRollback' 'morphology-rollback' ($existing+
+                    @('-e','lexiflowCorpus',$beforeVersion))
+            }
         } else {
         Run-Test 'usesRealDictionaryAndPersistsPersonalData' '5000-seed'
         Run-Test 'seedAdditionalUpgradeSaves' '5000-extra-saves'

@@ -283,6 +283,32 @@ public class RealResearchFlowTest {
         }
     }
 
+    @Test public void displaysUsageExampleWithSeparateSentenceAndTranslationCredits() throws Exception {
+        var target = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        assumeTrue("app.lexiflow.researchcheck".equals(target.getPackageName()));
+        try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
+            awaitDictionary(scenario,state -> state.status()!=DictionaryRepository.Status.LOADING,"usage corpus opened",120);
+            assertEquals(DictionaryRepository.Status.AVAILABLE,view(scenario).status());
+            assertTrue(view(scenario).corpusVersion().endsWith("-usage-pilot"));
+            query("chance");
+            awaitDictionary(scenario,state -> state.hits().stream().anyMatch(row ->
+                    "chance".equals(row.spelling()) && "n".equals(row.pos())),"example article available");
+            var hit = view(scenario).hits().stream().filter(row -> "chance".equals(row.spelling()) && "n".equals(row.pos()))
+                    .findFirst().orElseThrow();
+            onView(withText("chance · n · "+target.getString(R.string.sense_title,hit.position())
+                    +"\n"+TranslationDisplay.wording(hit.translation()))).perform(scrollTo(),click());
+            awaitDictionary(scenario,state -> state.entry()!=null,"article with example opened");
+            var article = view(scenario).entry();
+            var usage = article.metadata().stream().filter(row -> "usage_example".equals(row.kind()))
+                    .findFirst().orElseThrow();
+            assertEquals(2,usage.value().split("\n").length);
+            assertEquals(2,usage.attribution().split("tatoeba.org/en/sentences/show/",-1).length-1);
+            assertTrue(article.senses().stream().allMatch(row -> row.examples().isEmpty()));
+            onView(withText(startsWith(target.getString(R.string.source_usage_example))))
+                    .perform(scrollTo()).check(matches(isDisplayed()));
+        }
+    }
+
     @Test public void readsBothLanguagesAfterRestartOrRollback() throws Exception {
         var args = InstrumentationRegistry.getArguments();
         String word = args.getString("lexiflowDirectWord");

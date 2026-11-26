@@ -23,9 +23,11 @@ import java.util.regex.Pattern;
 record PackageManifest(int format, int schema, String version, String unicode, String digest, boolean research,
                        Map<String,Object> counts, Map<String,Attribution> attributions,
                        Map<String,ContextLink> contexts,Map<String,List<EntryNote>> entryNotes,
-                       Map<String,List<CefrLabel>> entryCefr) {
+                       Map<String,List<CefrLabel>> entryCefr,Map<String,UsageExample> usageExamples) {
     static final String NORMALIZATION = "nfc-casefold-nfc-python-whitespace-v1";
     private static final String RESEARCH_POLICY = "research-local-v1";
+    private static final String USAGE_EXTENSION = "entry_usage_examples";
+    private static final String USAGE_SNAPSHOT = "f4b0e574f5b9f8bee0e8e59b6e4e9c762db2dbbc05a4f02c60f63ad586690dd1";
     private static final Pattern SHA256 = Pattern.compile("[0-9a-f]{64}");
     private static final Set<String> POLICY_FIELDS = new HashSet<>(Arrays.asList(
             "source","snapshot","source_url","license_id","terms_url","attribution"));
@@ -71,6 +73,13 @@ record PackageManifest(int format, int schema, String version, String unicode, S
             return evidence.modification().equals(RESEARCH_POLICY+": CEFR-J lemma="+lemma+"; pos="+pos);
         }
     }
+    record UsageSentence(String text,Attribution evidence,String id) {
+        String credit() {
+            return evidence.policy().credit() + " · " + evidence.policy().license()
+                    + "\nhttps://tatoeba.org/en/sentences/show/" + id + "\n" + evidence.policy().terms();
+        }
+    }
+    record UsageExample(UsageSentence original,UsageSentence translation) {}
 
     static PackageManifest parse(Reader input) throws IOException, JSONException {
         return parse(input,null,true);
@@ -96,11 +105,12 @@ record PackageManifest(int format, int schema, String version, String unicode, S
         boolean research = version.toLowerCase(java.util.Locale.ROOT).startsWith("research-");
         if (research ? format < 2 || schema < 2 || !RESEARCH_POLICY.equals(root.get("distribution_policy"))
                 : root.containsKey("distribution_policy") || root.containsKey("source_entry_notes")
-                || root.containsKey("entry_cefr")) {
+                || root.containsKey("entry_cefr") || root.containsKey(USAGE_EXTENSION)) {
             throw new JSONException("inconsistent research package markers");
         }
         if ((format == 3 && !research) || ((schema == 3 || root.containsKey("entry_cefr")) && format != 3)
-                || (root.containsKey("modifications") != (format == 3))) {
+                || (root.containsKey("modifications") != (format == 3))
+                || (root.containsKey(USAGE_EXTENSION) && (schema!=3 || format!=3))) {
             throw new JSONException("invalid modification table format");
         }
         started = System.nanoTime();
@@ -126,7 +136,56 @@ record PackageManifest(int format, int schema, String version, String unicode, S
         }
         return new PackageManifest(format,schema,version,requiredText(root.get("unicode_version")),digest,research,
                 object(root.get("counts")),attributions,contexts,decodeEntryNotes(root,attributions),
-                decodeEntryCefr(root,attributions));
+                decodeEntryCefr(root,attributions),decodeUsageExamples(root,attributions));
+    }
+
+    private static Map<String,UsageExample> decodeUsageExamples(Map<String,Object> root,
+                Map<String,Attribution> attributions) throws JSONException {
+        if (!root.containsKey(USAGE_EXTENSION)) return java.util.Collections.emptyMap();
+        var extension = object(root.get(USAGE_EXTENSION));
+        var entries = object(extension.get("entries"));
+        if (extension.size()!=2 || integer(extension.get("version"))!=1 || entries.size()!=1) {
+            throw new JSONException("invalid usage example extension");
+        }
+        var row = entries.entrySet().iterator().next();
+        var pair = object(row.getValue());
+        if (pair.size()!=2) throw new JSONException("invalid usage example pair");
+        var original = decodeUsageSentence(pair.get("en"),"en",attributions);
+        var translation = decodeUsageSentence(pair.get("ru"),"ru",attributions);
+        String content = String.join("\n",row.getKey(),original.id(),translation.id(),original.text(),translation.text());
+        var digest = sha256().digest(content.getBytes(StandardCharsets.UTF_8));
+        var text = new StringBuilder(RESEARCH_POLICY+": entry usage ");
+        for (byte value : digest) text.append(HEX[(value&255)>>>4]).append(HEX[value&15]);
+        if (original.id().equals(translation.id()) || !text.toString().equals(original.evidence().modification())
+                || !text.toString().equals(translation.evidence().modification())) {
+            throw new JSONException("usage example owner or text changed");
+        }
+        return java.util.Collections.singletonMap(row.getKey(),new UsageExample(original,translation));
+    }
+
+    private static UsageSentence decodeUsageSentence(Object row,String language,
+                Map<String,Attribution> attributions) throws JSONException {
+        var fields = object(row);
+        String text = requiredText(fields.get("text"));
+        var evidence = attributions.get(requiredText(fields.get("evidence")));
+        if (fields.size()!=2 || evidence==null || text.codePointCount(0,text.length())>240
+                || text.contains("\n") || text.contains("\r") || text.contains("://")) {
+            throw new JSONException("invalid usage example sentence");
+        }
+        var policy = evidence.policy();
+        var locator = Pattern.compile("sentences/([1-9][0-9]*)/"+language).matcher(evidence.locator());
+        String terms = switch (policy.license()) {
+            case "CC BY 2.0 FR" -> "https://creativecommons.org/licenses/by/2.0/fr/";
+            case "CC0 1.0" -> "https://creativecommons.org/publicdomain/zero/1.0/";
+            default -> "";
+        };
+        if (!locator.matches() || !"Tatoeba API v1".equals(policy.source().name())
+                || !USAGE_SNAPSHOT.equals(policy.source().snapshot()) || !"https://api.tatoeba.org/".equals(policy.source().url())
+                || !terms.equals(policy.terms()) || !policy.credit().startsWith("Tatoeba · ")
+                || policy.credit().substring("Tatoeba · ".length()).trim().isEmpty()) {
+            throw new JSONException("invalid usage example attribution");
+        }
+        return new UsageSentence(text,evidence,locator.group(1));
     }
 
     private static Map<String,List<CefrLabel>> decodeEntryCefr(Map<String,Object> root,

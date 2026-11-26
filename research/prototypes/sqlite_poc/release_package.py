@@ -21,6 +21,12 @@ CEFR_SOURCE = 'CEFR-J Wordlist 1.6'
 CEFR_SHA = 'c837d2c00ab8954ed8db48e79afd8ef37099570295fec36950dbf9322303a37a'
 CEFR_URL = 'https://www.cefr-j.org/download.html'
 CEFR_LICENSE = 'CEFR-J-Wordlist-1.6-attribution'
+USAGE_SOURCE = 'Tatoeba API v1'
+USAGE_URL = 'https://api.tatoeba.org/'
+USAGE_SNAPSHOT = 'f4b0e574f5b9f8bee0e8e59b6e4e9c762db2dbbc05a4f02c60f63ad586690dd1'
+USAGE_LICENSES = {'CC BY 2.0 FR':'https://creativecommons.org/licenses/by/2.0/fr/',
+                  'CC0 1.0':'https://creativecommons.org/publicdomain/zero/1.0/'}
+USAGE_EXTENSION = 'entry_usage_examples'
 
 
 def cefr_modification(lemma,pos):
@@ -474,7 +480,8 @@ def validate_package(package):
         if (data.get('distribution_policy') != RESEARCH_POLICY or not all(marked)
                 or version not in (2,3) or package_format not in (COMPACT_FORMAT,3)):
             raise ValueError('inconsistent research package markers')
-    elif 'distribution_policy' in data or 'source_entry_notes' in data or 'entry_cefr' in data or any(marked):
+    elif ('distribution_policy' in data or 'source_entry_notes' in data or 'entry_cefr' in data
+          or USAGE_EXTENSION in data or any(marked)):
         raise ValueError('inconsistent research package markers')
     if version == 3 and (not research or package_format!=3):
         raise ValueError('bilingual schema requires research format 3')
@@ -522,7 +529,47 @@ def validate_package(package):
             if package_format!=3:
                 raise ValueError('entry CEFR requires research format 3')
             validate_entry_cefr(conn,data['entry_cefr'],attrs,version)
+        if USAGE_EXTENSION in data:
+            if not research or version!=3 or package_format!=3:
+                raise ValueError('usage examples require bilingual research format 3')
+            validate_entry_usage(conn,data[USAGE_EXTENSION],attrs)
     return data
+
+
+def usage_modification(entry, original, translation, body, wording):
+    content = '\n'.join((entry,original,translation,body,wording))
+    return RESEARCH_POLICY+': entry usage '+hashlib.sha256(content.encode()).hexdigest()
+
+
+def validate_entry_usage(conn,extension,attrs):
+    if (not isinstance(extension,dict) or set(extension)!={'version','entries'}
+            or type(extension['version']) is not int or extension['version']!=1
+            or not isinstance(extension['entries'],dict) or len(extension['entries'])!=1):
+        raise ValueError('invalid usage example extension')
+    entry, pair = next(iter(extension['entries'].items()))
+    if (not conn.execute("SELECT 1 FROM entry WHERE language='en' AND id=? AND search_key='chance' AND pos='n'",
+                         (entry,)).fetchone() or not isinstance(pair,dict) or set(pair)!={'en','ru'}):
+        raise ValueError('invalid usage example owner')
+    ids, texts, modifications = [],[],[]
+    for language in ('en','ru'):
+        row = pair[language]
+        if (not isinstance(row,dict) or set(row)!={'text','evidence'} or not isinstance(row['evidence'],str)
+                or not isinstance(row['text'],str) or not row['text'].strip() or len(row['text'])>240
+                or '\n' in row['text'] or '\r' in row['text'] or '://' in row['text']):
+            raise ValueError('invalid usage example sentence')
+        record = attrs.get(row['evidence'],{})
+        locator = re.fullmatch(r'sentences/([1-9][0-9]*)/'+language,record.get('locator',''))
+        if (not locator or (record.get('source'),record.get('snapshot'),record.get('source_url'))
+                != (USAGE_SOURCE,USAGE_SNAPSHOT,USAGE_URL)
+                or record.get('license_id') not in USAGE_LICENSES
+                or record.get('terms_url')!=USAGE_LICENSES[record['license_id']]
+                or not record['attribution'].startswith('Tatoeba · ') or not record['attribution'][9:].strip()):
+            raise ValueError('invalid usage example attribution')
+        ids.append(locator[1])
+        texts.append(row['text'])
+        modifications.append(record['modification'])
+    if ids[0]==ids[1] or any(value!=usage_modification(entry,*ids,*texts) for value in modifications):
+        raise ValueError('usage example text or owner changed')
 
 
 def validate_entry_cefr(conn,extension,attrs,version):

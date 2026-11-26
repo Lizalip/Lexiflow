@@ -12,6 +12,7 @@ from candidate_rank import subtlex_frequency
 from corpus_enrichment import LICENSE, RUS_ENG_SHA, SOURCE, TERMS, URL
 from prototype import integrity, normalize
 from release_package import CEFR_LICENSE, CEFR_SHA, CEFR_SOURCE, CEFR_URL, RESEARCH_POLICY
+from release_package import USAGE_EXTENSION, USAGE_LICENSES, USAGE_SNAPSHOT, USAGE_SOURCE, USAGE_URL
 from release_package import checksum, connect, validate_package, write_package
 from sense_context import direct_child
 
@@ -189,6 +190,10 @@ def validate_research_pair(package):
     if 'entry_cefr' in result:
         expected.append([CEFR_SOURCE,CEFR_SHA,CEFR_URL])
         policies.add((CEFR_SOURCE,CEFR_SHA,CEFR_URL,CEFR_LICENSE,CEFR_URL))
+    if USAGE_EXTENSION in result:
+        expected.append([USAGE_SOURCE,USAGE_SNAPSHOT,USAGE_URL])
+        policies.update((USAGE_SOURCE,USAGE_SNAPSHOT,USAGE_URL,license_id,terms)
+                        for license_id,terms in USAGE_LICENSES.items())
     if (result.get('distribution_policy') != RESEARCH_POLICY or result['sources'] != sorted(expected)
             or any(tuple(row.get(key) for key in ('source','snapshot','source_url','license_id','terms_url'))
                    not in policies for row in result['policies'])

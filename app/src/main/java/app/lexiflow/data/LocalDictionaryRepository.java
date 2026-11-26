@@ -259,7 +259,7 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
     }
 
     private String validation(String manifestDigest,String databaseDigest) {
-        return "3\n" + (isResearchProfile(context) ? "research" : debug() ? "debug" : "apk") + "\n"
+        return "4\n" + (isResearchProfile(context) ? "research" : debug() ? "debug" : "apk") + "\n"
                 + android.os.Build.VERSION.SDK_INT + "\n" + android.os.Build.VERSION.INCREMENTAL + "\n"
                 + android.icu.lang.UCharacter.getUnicodeVersion() + "\n" + manifestDigest + "\n" + databaseDigest;
     }
@@ -330,6 +330,12 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
                         +" OR t.language IS NULL OR e.language IS NULL"
                         +" OR t.language NOT IN ('en','ru') OR e.language NOT IN ('en','ru')"))) {
                     throw new SQLiteException("invalid bilingual direction");
+                }
+                for (String entryId : candidate.usageExamples().keySet()) {
+                    try (Cursor row = opened.rawQuery("SELECT id FROM entry WHERE id=?"
+                            +" AND language='en' AND search_key='chance' AND pos='n'",new String[]{entryId})) {
+                        if (!row.moveToFirst()) throw new JSONException("invalid usage example owner");
+                    }
                 }
             }
             checkPersistentIds(opened,candidate);
@@ -713,6 +719,11 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
                 for (var label : cefr) levels.add(label.level());
                 entryMetadata.add(new Metadata("cefr",String.join(" · ",levels),"en",null,
                         cefr.get(0).evidence().displayCredit()));
+            }
+            var usage = manifest.usageExamples().get(id);
+            if (usage != null) {
+                entryMetadata.add(new Metadata("usage_example",usage.original().text()+"\n"+usage.translation().text(),
+                        "en",null,usage.original().credit()+"\n"+usage.translation().credit()));
             }
             return new Entry(id,entry.getString(0),entry.getString(1),senses,attribution(entry.getString(2)),
                     entryMetadata,new ArrayList<>(forms),language);

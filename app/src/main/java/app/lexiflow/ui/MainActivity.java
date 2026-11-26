@@ -344,6 +344,7 @@ public final class MainActivity extends AppCompatActivity {
                 case "definition" -> sourceEntryNotes ? R.string.research_definition_note : R.string.metadata_definition;
                 case "source_gloss" -> R.string.metadata_gloss;
                 case "cefr" -> R.string.metadata_cefr;
+                case "usage_example" -> R.string.source_usage_example;
                 case "grammar" -> R.string.metadata_grammar;
                 default -> 0;
             };

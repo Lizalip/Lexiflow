@@ -6,8 +6,10 @@ param(
     [switch]$UpdateResearch,
     [switch]$Measure30000,
     [switch]$CheckRollback,
-    [ValidateSet('full','bilingual')][string]$Advanced,
-    [string]$DirectWord
+    [ValidateSet('full','bilingual','bilingual-expansion')][string]$Advanced,
+    [string]$DirectWord,
+    [string]$AddedWord,
+    [ValidateSet('10000','20000')][string]$RussianSize = '20000'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -15,8 +17,11 @@ $PSNativeCommandUseErrorActionPreference = $true
 if ($Advanced -and ($UpdateResearch -or $Measure30000 -or $CheckRollback)) {
     throw 'Advanced experiments must stay in the temporary profile.'
 }
-if ($Advanced -eq 'bilingual' -and !$DirectWord) {
+if ($Advanced -like 'bilingual*' -and !$DirectWord) {
     throw 'Supply an exact direct Russian headword for the instrumented article scenario.'
+}
+if ($Advanced -eq 'bilingual-expansion' -and !$AddedWord) {
+    throw 'Supply an exact Russian headword available only after expansion.'
 }
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $adb = Join-Path $Sdk 'platform-tools/adb.exe'
@@ -114,6 +119,13 @@ try {
     } elseif ($Advanced -eq 'bilingual') {
         $initial = Build-Apk $new '20000-isolated' -Tests
         $expanded = Build-Apk "$artifacts/research-scaling/bilingual-20000-5000" 'bilingual-isolated'
+    } elseif ($Advanced -eq 'bilingual-expansion') {
+        $baseline = "$artifacts/research-scaling/bilingual-cefr-attributed"
+        $candidate = "$artifacts/research-scaling/bilingual-cefr-$RussianSize"
+        & $Python research/prototypes/sqlite_poc/research_upgrade.py $baseline $candidate |
+            Tee-Object -FilePath (Join-Path $run.FullName 'identity.json')
+        $initial = Build-Apk $baseline 'bilingual-5000-isolated' -Tests
+        $expanded = Build-Apk $candidate "bilingual-$RussianSize-isolated"
     } else {
         $initial = Build-Apk $old '5000-isolated' -Tests
         $expanded = Build-Apk $new '20000-isolated'
@@ -133,6 +145,18 @@ try {
             Run-Test 'readsBothLanguagesAfterRestartOrRollback' 'bilingual-restart' @('-e','lexiflowDirectWord',$DirectWord)
             & $adb -s $serial install -r -t $initial
             Run-Test 'readsBothLanguagesAfterRestartOrRollback' 'bilingual-rollback' @('-e','lexiflowDirectWord',$DirectWord,'-e','lexiflowRollback','true')
+        } elseif ($Advanced -eq 'bilingual-expansion') {
+            $existing = @('-e','lexiflowDirectWord',$DirectWord)
+            $added = @('-e','lexiflowAddedWord',$AddedWord)
+            $version = @('-e','lexiflowCorpus',"research-bilingual-freedict-2025.11.23-$RussianSize-cefr-j")
+            Run-Test 'usesRealDictionaryAndPersistsPersonalData' 'expansion-english-seed' @('-e','lexiflowEvidence','true')
+            Run-Test 'learnsAnIndependentRussianSenseAfterUpdatingEnglishCorpus' 'expansion-russian-seed' $existing
+            & $adb -s $serial install -r -t $expanded
+            Run-Test 'savesRussianSenseAfterBilingualExpansion' 'expansion-upgrade' ($added+$version+@('-e','lexiflowEvidence','true'))
+            Run-Test 'readsBothLanguagesAfterRestartOrRollback' 'expansion-restart' ($existing+$added+$version)
+            & $adb -s $serial install -r -t $initial
+            Run-Test 'readsBothLanguagesAfterRestartOrRollback' 'expansion-rollback' ($existing+$added+
+                @('-e','lexiflowCorpus','research-bilingual-freedict-2025.11.23-5000-cefr-j','-e','lexiflowRollback','true'))
         } else {
         Run-Test 'usesRealDictionaryAndPersistsPersonalData' '5000-seed'
         Run-Test 'seedAdditionalUpgradeSaves' '5000-extra-saves'

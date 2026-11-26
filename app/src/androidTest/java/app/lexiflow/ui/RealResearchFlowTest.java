@@ -315,19 +315,30 @@ public class RealResearchFlowTest {
         var target = InstrumentationRegistry.getInstrumentation().getTargetContext();
         assumeTrue(word!=null && "app.lexiflow.researchcheck".equals(target.getPackageName()));
         boolean rollback = "true".equals(args.getString("lexiflowRollback"));
+        String added = args.getString("lexiflowAddedWord");
+        String expectedVersion = args.getString("lexiflowCorpus");
         try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
             awaitAvailable(scenario);
+            if (expectedVersion!=null) assertEquals(expectedVersion,view(scenario).corpusVersion());
             onView(withId(R.id.vocabulary)).perform(click());
-            await(scenario,state -> state.savedCount()==2 && state.saved().stream().anyMatch(row ->
+            await(scenario,state -> state.savedCount()==(added==null ? 2 : 3) && state.saved().stream().anyMatch(row ->
                     word.equals(row.spelling) && "Local trial note".equals(row.note)
                     && "Local trial gloss".equals(row.custom)),"both saved languages persisted");
             onView(withText(startsWith(word+" · "))).perform(scrollTo(),click());
             onView(withText(R.string.open_saved)).perform(click());
             awaitDictionary(scenario,state -> state.status()==DictionaryRepository.Status.AVAILABLE,
                     "saved link opened");
-            if (rollback) onView(withText(R.string.entry_unavailable)).check(matches(isDisplayed()));
+            if (rollback && added==null) onView(withText(R.string.entry_unavailable)).check(matches(isDisplayed()));
             else assertEquals(word,view(scenario).entry().spelling());
             back();
+            if (added!=null) {
+                onView(withText(startsWith(added+" · "))).perform(scrollTo(),click());
+                onView(withText(R.string.open_saved)).perform(click());
+                if (rollback) onView(withText(R.string.entry_unavailable)).check(matches(isDisplayed()));
+                else awaitDictionary(scenario,state -> state.entry()!=null && added.equals(state.entry().spelling()),
+                        "expanded Russian article reopened");
+                back();
+            }
             onView(withId(R.id.action)).perform(scrollTo(),click());
             onView(withText(COLLECTION)).perform(scrollTo(),click());
             await(scenario,state -> state.collection()!=0 && state.saved().size()==2,"collection persisted");
@@ -338,6 +349,44 @@ public class RealResearchFlowTest {
             await(scenario,state -> state.screen()==Screen.PROGRESS && state.cards()==4 && state.reviewed()==4,
                     "bilingual review history persisted");
         }
+    }
+
+    @Test public void savesRussianSenseAfterBilingualExpansion() throws Exception {
+        var instrumentation = InstrumentationRegistry.getInstrumentation();
+        var target = instrumentation.getTargetContext();
+        var args = InstrumentationRegistry.getArguments();
+        String added = args.getString("lexiflowAddedWord");
+        String expectedVersion = args.getString("lexiflowCorpus");
+        assumeTrue(added!=null && expectedVersion!=null && "app.lexiflow.researchcheck".equals(target.getPackageName()));
+        long start = SystemClock.elapsedRealtime();
+        try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
+            awaitDictionary(scenario,state -> state.status()!=DictionaryRepository.Status.LOADING,"expanded package activated",120);
+            assertEquals(DictionaryRepository.Status.AVAILABLE,view(scenario).status());
+            assertEquals(expectedVersion,view(scenario).corpusVersion());
+            logCapacity(target,start);
+            onView(withId(R.id.direction)).perform(click());
+            long typed = SystemClock.elapsedRealtime();
+            query(added);
+            awaitDictionary(scenario,state -> !state.hits().isEmpty() && added.equals(state.hits().get(0).spelling()),
+                    "new direct Russian sense found");
+            var hit = view(scenario).hits().get(0);
+            assertEquals("ru",hit.language());
+            String label = hit.spelling()+" · "+hit.pos()+" · "+target.getString(R.string.sense_title,hit.position())
+                    +"\n"+TranslationDisplay.wording(hit.translation())+"\n"+target.getString(R.string.direct_russian_article);
+            onView(withText(label)).check(matches(isDisplayed()));
+            Log.i(TAG,"new Russian input to visible match ms="+(SystemClock.elapsedRealtime()-typed));
+            capture(scenario,"11-expanded-russian-results");
+            onView(withText(label)).perform(scrollTo(),click());
+            awaitDictionary(scenario,state -> state.entry()!=null && hit.entryId().equals(state.entry().id()),
+                    "expanded article opened");
+            capture(scenario,"12-expanded-russian-entry");
+            onView(withText(target.getString(R.string.save_sense,hit.position()))).perform(scrollTo(),click());
+            back();
+            onView(withId(R.id.vocabulary)).perform(click());
+            await(scenario,state -> state.savedCount()==3 && state.saved().stream()
+                    .anyMatch(row -> hit.senseId().equals(row.senseId)),"expanded Russian sense saved");
+        }
+        measureRepository(target);
     }
 
     @Test public void resolvesUnaccentedRussianQueriesThroughTheResearchIndex() throws Exception {

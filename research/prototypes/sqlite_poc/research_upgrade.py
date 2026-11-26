@@ -3,7 +3,7 @@ import argparse
 import json
 from pathlib import Path
 
-from release_package import checksum, connect
+from release_package import checksum, connect, expand_attributions
 from research_package import DATA, validate_research_pair
 
 
@@ -18,31 +18,32 @@ def differences(db, projection, table, owner, base_table):
 def compare(before, after):
     early = validate_research_pair(before)
     late = validate_research_pair(after)
-    if early['sources'] != late['sources'] or early['policies'] != late['policies']:
-        raise ValueError('source snapshot or policy changed')
-    def decoded(manifest, key):
-        row = manifest['attributions'].get(key)
-        if row is not None and manifest['package_format'] == 3:
-            return [row[0],row[1],manifest['modifications'][row[2]]]
-        return row
-    for key in early['attributions']:
-        if decoded(late,key) != decoded(early,key):
-            raise ValueError('existing attribution changed')
-    early_notes = early.get('source_entry_notes',{}).get('entries',{})
-    late_notes = late.get('source_entry_notes',{}).get('entries',{})
+    if early['schema_version'] != late['schema_version'] or not set(map(tuple,early['sources'])) <= set(map(tuple,late['sources'])):
+        raise ValueError('schema or existing source snapshot changed')
+    old_attrs = expand_attributions(early['policies'],early['attributions'],early.get('modifications'))
+    new_attrs = expand_attributions(late['policies'],late['attributions'],late.get('modifications'))
+    if any(new_attrs.get(key) != value for key,value in old_attrs.items()):
+        raise ValueError('existing attribution changed')
+    language = ',language' if early['schema_version']==3 else ''
     with connect(before/'dictionary.sqlite','ro') as db:
         db.execute('ATTACH DATABASE ? AS expanded',((after/'dictionary.sqlite').resolve().as_uri()+'?mode=ro',))
         checks = {
-            'entries': differences(db,'id,spelling,pos,search_key,attribution_id','entry','id','entry'),
+            'entries': differences(db,'id,spelling,pos,search_key,attribution_id'+language,'entry','id','entry'),
             'senses': differences(db,'id,entry_id,position,attribution_id','sense','entry_id','entry'),
-            'translations': differences(db,'sense_id,wording,search_key,attribution_id,origin_attribution_id',
+            'translations': differences(db,'sense_id,wording,search_key,attribution_id,origin_attribution_id'+language,
                                         'translation','sense_id','sense'),
         }
-        checks['source_notes'] = sum(early_notes.get(key) != late_notes.get(key)
-                                     for key, in db.execute('SELECT id FROM main.entry'))
-        counts = {schema:{'spellings':db.execute(f'SELECT count(DISTINCT search_key) FROM {schema}.entry').fetchone()[0],
-                          'entries':manifest['counts']['entry'],'senses':manifest['counts']['sense']}
-                  for schema,manifest in (('main',early),('expanded',late))}
+        for extension in ('source_entry_notes','entry_cefr','entry_usage_examples'):
+            prior = early.get(extension,{}).get('entries',{})
+            offered = late.get(extension,{}).get('entries',{})
+            checks[extension] = sum(offered.get(key) != value for key,value in prior.items())
+        counts = {}
+        for schema,manifest in (('main',early),('expanded',late)):
+            grouped = db.execute(f'SELECT language,count(DISTINCT search_key) FROM {schema}.entry GROUP BY language').fetchall() \
+                if language else [('en',db.execute(f'SELECT count(DISTINCT search_key) FROM {schema}.entry').fetchone()[0])]
+            counts[schema] = dict(spellings=sum(count for _,count in grouped),headwords=dict(grouped),
+                                  entries=manifest['counts']['entry'],senses=manifest['counts']['sense'],
+                                  translations=manifest['counts']['translation'])
     if any(checks.values()) or counts['expanded']['spellings'] <= counts['main']['spellings']:
         raise ValueError(f'not a compatible expansion: {checks}')
     return dict(before=counts['main'],after=counts['expanded'],differences=checks,

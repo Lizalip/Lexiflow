@@ -121,7 +121,10 @@ public abstract class PersonalDatabase extends RoomDatabase {
         @Insert public abstract void addEvent(Event event);
 
         @Query("SELECT id FROM saved WHERE entryId=:entry AND senseId=:sense")
-        abstract long savedId(String entry,String sense);
+        public abstract long savedId(String entry,String sense);
+
+        @Query("SELECT EXISTS(SELECT 1 FROM cards WHERE savedId=:saved)")
+        public abstract boolean hasStudyCard(long saved);
 
         @Query("SELECT id FROM cards WHERE savedId=:saved AND reverse=0")
         abstract long forwardCard(long saved);

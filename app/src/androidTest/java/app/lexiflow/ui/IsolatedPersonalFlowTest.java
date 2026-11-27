@@ -55,11 +55,11 @@ public class IsolatedPersonalFlowTest {
             onView(withId(R.id.query)).perform(click(),replaceText("zeta-demo"),closeSoftKeyboard());
             NavigationTest.awaitDictionary(scenario);
             capture(scenario,"02-results");
-            onView(withText(startsWith("zeta-demo · noun · Значение 1"))).perform(scrollTo(),click());
+            onView(org.hamcrest.Matchers.allOf(withId(R.id.result_word),withText("zeta-demo"))).perform(scrollTo(),click());
             NavigationTest.awaitDictionary(scenario);
             capture(scenario,"03-entry");
-            var save = onView(withText(context.getString(R.string.save_sense,1)));
-            save.perform(scrollTo(),click(),click());
+            onView(withText(R.string.add_word)).perform(scrollTo(),click());
+            onView(withText(R.string.word_in_vocabulary)).check(matches(org.hamcrest.Matchers.not(isEnabled())));
             back();
             onView(withId(R.id.vocabulary)).perform(click());
             await(scenario,state -> state.screen() == Screen.VOCABULARY && state.savedCount() == 1,"one saved sense");

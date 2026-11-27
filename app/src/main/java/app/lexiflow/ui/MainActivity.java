@@ -35,7 +35,7 @@ public final class MainActivity extends AppCompatActivity {
     private TextInputEditText query;
     private TextInputEditText savedQuery;
     private OfflinePronunciation pronunciation;
-    private MaterialButton pronunciationButton;
+    private final java.util.List<View> pronunciationControls = new java.util.ArrayList<>();
     private Integer restoredPersonalScroll;
     private final OnBackPressedCallback back = new OnBackPressedCallback(false) {
         @Override public void handleOnBackPressed() {
@@ -141,6 +141,7 @@ public final class MainActivity extends AppCompatActivity {
 
     private void render() {
         Screen screen = model.screen();
+        if (pronunciation != null) pronunciation.stop();
         boolean nested = screen.parent() != screen || screen == Screen.SETTINGS;
         back.setEnabled(screen != Screen.SEARCH);
         if (nested) {
@@ -157,15 +158,19 @@ public final class MainActivity extends AppCompatActivity {
             navigation.getMenu().findItem(id).setChecked(true);
         }
         ((TextView) findViewById(R.id.title)).setText(screen.title);
+        findViewById(R.id.title).setVisibility(screen == Screen.ENTRY ? View.GONE : View.VISIBLE);
+        findViewById(R.id.screen_panel).setVisibility(View.VISIBLE);
         findViewById(R.id.research_banner).setVisibility(screen == Screen.SEARCH
                 && LocalDictionaryRepository.isResearchProfile(this) ? View.VISIBLE : View.GONE);
-        setTitle(screen.title);
+        setTitle(screen == Screen.ENTRY ? R.string.app_name : screen.title);
         findViewById(R.id.pair).setVisibility(screen == Screen.SEARCH || screen == Screen.SETTINGS ? View.VISIBLE : View.GONE);
         findViewById(R.id.query_box).setVisibility(screen == Screen.SEARCH ? View.VISIBLE : View.GONE);
         findViewById(R.id.saved_query_box).setVisibility(screen == Screen.VOCABULARY ? View.VISIBLE : View.GONE);
         ((TextView) findViewById(R.id.panel_title)).setText(screen.heading);
         ((TextView) findViewById(R.id.body)).setText(screen.body);
         MaterialButton action = findViewById(R.id.action);
+        action.getLayoutParams().width = screen == Screen.VOCABULARY
+                ? android.view.ViewGroup.LayoutParams.MATCH_PARENT : android.view.ViewGroup.LayoutParams.WRAP_CONTENT;
         action.setVisibility(screen.action == 0 ? View.GONE : View.VISIBLE);
         if (screen.action != 0) action.setText(screen.action);
         ((ScrollView) findViewById(R.id.scroll)).scrollTo(0, 0);
@@ -175,7 +180,6 @@ public final class MainActivity extends AppCompatActivity {
 
     private void renderDictionary() {
         Screen screen = model.screen();
-        if (screen != Screen.ENTRY && pronunciation != null) pronunciation.stop();
         TextView heading = findViewById(R.id.panel_title);
         TextView body = findViewById(R.id.body);
         MaterialButton direction = findViewById(R.id.direction);
@@ -208,11 +212,14 @@ public final class MainActivity extends AppCompatActivity {
             return;
         }
         if (screen != Screen.SEARCH && screen != Screen.ENTRY) return;
+        pronunciationControls.clear();
         rows.removeAllViews();
+        findViewById(R.id.screen_panel).setVisibility(View.VISIBLE);
         heading.setText(screen.heading);
         body.setText(screen.body);
         if (screen == Screen.ENTRY && state.entry() != null) {
-            renderEntry(rows, heading, body, state.entry());
+            findViewById(R.id.screen_panel).setVisibility(View.GONE);
+            renderEntry(rows,state);
             return;
         }
         if (screen == Screen.SEARCH) {
@@ -248,21 +255,22 @@ public final class MainActivity extends AppCompatActivity {
                     }
                 }
                 for (var hit : state.hits()) {
-                    String label = hit.spelling() + (hit.pos() == null ? "" : " · " + hit.pos())
-                            + " · " + getString(R.string.sense_title, hit.position());
-                    if (hit.translation() != null) label += "\n" + (state.corpusVersion()!=null
-                            && state.corpusVersion().startsWith("research-")
-                            ? TranslationDisplay.wording(hit.translation()) : hit.translation());
-                    if ("ru".equals(hit.language())) label += "\n" + getString(R.string.direct_russian_article);
-                    if (hit.accentMatch()) label += "\n" + getString(R.string.accent_search_match);
-                    if (hit.matchedForm() != null) label += "\n" + getString(R.string.matched_form,hit.matchedForm());
-                    addOutlineAction(rows, label, () -> {
+                    View result = getLayoutInflater().inflate(R.layout.search_result,rows,false);
+                    result.setTag(hit.senseId());
+                    ((TextView)result.findViewById(R.id.result_word)).setText(hit.spelling());
+                    TextView translation = result.findViewById(R.id.result_translation);
+                    String preview = searchPreview(hit);
+                    translation.setVisibility(preview.isEmpty() ? View.GONE : View.VISIBLE);
+                    translation.setText(preview);
+                    addPronunciation(result.findViewById(R.id.result_line),hit.spelling(),hit.language());
+                    result.setOnClickListener(v -> {
                         rememberSearchPosition();
                         getSystemService(InputMethodManager.class).hideSoftInputFromWindow(query.getWindowToken(), 0);
                         query.clearFocus();
                         model.select(hit.entryId(),hit.senseId());
                         render();
                     });
+                    rows.addView(result);
                 }
                 ScrollView scroll = findViewById(R.id.scroll);
                 scroll.post(() -> {
@@ -285,112 +293,151 @@ public final class MainActivity extends AppCompatActivity {
         };
     }
 
-    private void renderEntry(LinearLayout rows, TextView heading, TextView body, DictionaryRepository.Entry entry) {
-        pronunciationButton = null;
-        heading.setText(entry.spelling());
-        body.setText(localPartOfSpeech(entry.pos()));
-        if (model.dictionaryView.getValue().synthetic()) {
-            if (entry.pos() == null) body.setText(R.string.dictionary_synthetic);
-            else body.setText(getString(R.string.dictionary_synthetic_pos,localPartOfSpeech(entry.pos())));
-        }
-        if ("en".equals(entry.language()) && pronunciation == null) {
-            pronunciation = new OfflinePronunciation(this,this::updatePronunciationButton);
-        }
-        if ("en".equals(entry.language())) {
-            pronunciationButton = addOutlineAction(rows,getString(R.string.pronounce_offline),() -> {
-                if (!pronunciation.speak(entry.spelling())) {
-                    Toast.makeText(this,R.string.pronunciation_error,Toast.LENGTH_SHORT).show();
-                }
-            });
-            updatePronunciationButton();
-        }
-        if ("ru".equals(entry.language())) {
-            if (pronunciation != null) pronunciation.stop();
-            body.setText(getString(R.string.direct_russian_part_of_speech,localPartOfSpeech(entry.pos())));
-        }
-        boolean research = LocalDictionaryRepository.isResearchProfile(this);
-        var ready = entry.senses().stream().filter(MainActivity::hasStudyAnswer)
-                .collect(java.util.stream.Collectors.toList());
-        var primary = ready.stream().filter(sense -> sense.id().equals(model.selectedSense())).findFirst()
-                .orElse(ready.isEmpty() ? null : ready.get(0));
-        if (primary != null) {
-            String first = primary.translations().stream().filter(word -> !word.trim().isEmpty())
-                    .findFirst().orElseThrow();
-            body.append("\n" + (research ? TranslationDisplay.wording(first) : first));
-            addAction(rows,getString(R.string.study_add_sense,primary.position()),() -> model.learn(entry,primary));
-        }
-        var credits = new java.util.LinkedHashSet<String>();
-        credits.add(entry.attribution());
-        addMetadata(rows,entry.metadata().stream().filter(MainActivity::primaryArticleMetadata)
-                .collect(java.util.stream.Collectors.toList()),false,credits);
-        addOutlineAction(rows,getString(R.string.save_entry),() -> model.save(entry,null));
-        if (!entry.senses().isEmpty()) addSectionHeading(rows,getString(R.string.article_meanings));
-        for (var sense : entry.senses()) {
-            StringBuilder text = new StringBuilder(getString(R.string.sense_title, sense.position()));
-            if (sense.id().equals(model.selectedSense())) text.append(" · ").append(getString(R.string.selected_sense));
-            var meaning = addBlock(rows,text.toString());
-            text.setLength(0);
-            for (String word : research ? TranslationDisplay.alternatives(sense.translations()) : sense.translations()) {
-                if (text.length() > 0) text.append("\n");
-                text.append(word);
-            }
-            if (text.length() > 0) addDetail(meaning,text);
-            else addDetail(meaning,getString(R.string.article_no_translation));
-            addMetadata(meaning,sense.metadata(),false,credits);
-            if (sense.context() != null) {
-                addDetail(meaning,getString(R.string.metadata_content,getString(R.string.source_context),sense.context().text()));
-                credits.add(sense.context().attribution());
-            }
-            if (!sense.examples().isEmpty()) {
-                addSectionHeading(meaning,getString(R.string.article_sense_examples));
-                for (var example : sense.examples()) {
-                    var exampleText = new StringBuilder(example.body());
-                    if (example.translation() != null) exampleText.append("\n").append(example.translation());
-                    exampleText.append("\n").append(example.attribution());
-                    addDetail(meaning,exampleText);
-                }
-            }
-            credits.add(sense.attribution());
-            if (sense != primary && hasStudyAnswer(sense)) {
-                addOutlineAction(meaning,getString(R.string.study_add_sense,sense.position()),() -> model.learn(entry,sense));
-            }
-            addOutlineAction(meaning,getString(R.string.save_sense,sense.position()),() -> model.save(entry,sense));
-        }
-        if (!entry.forms().isEmpty()) {
-            var block = addBlock(rows,getString(R.string.word_forms));
-            TextView forms = (TextView)getLayoutInflater().inflate(R.layout.entry_forms,block,false);
-            var text = new StringBuilder();
-            for (var form : entry.forms()) {
-                if (text.length() > 0) text.append("\n\n");
-                text.append(form.spelling());
-                if (form.grammar()!=null) text.append(" · ").append(localGrammar(form.grammar()));
-                credits.add(form.attribution());
-            }
-            forms.setText(text);
-            block.addView(forms);
-        }
-        var notes = entry.metadata().stream().filter(value -> !primaryArticleMetadata(value))
-                .collect(java.util.stream.Collectors.toList());
-        if (!notes.isEmpty()) {
-            var definitions = notes.stream().filter(value -> value.kind().equals("definition"))
-                    .collect(java.util.stream.Collectors.toList());
-            var examples = notes.stream().filter(value -> value.kind().equals("usage_example"))
-                    .collect(java.util.stream.Collectors.toList());
-            var other = notes.stream().filter(value -> !value.kind().equals("definition") && !value.kind().equals("usage_example"))
-                    .collect(java.util.stream.Collectors.toList());
-            if (!definitions.isEmpty()) addMetadata(addBlock(rows,getString(R.string.article_definitions)),definitions,research,credits);
-            if (!examples.isEmpty()) addMetadata(addBlock(rows,getString(R.string.article_examples)),examples,research,credits);
-            if (!other.isEmpty()) addMetadata(addBlock(rows,getString(R.string.article_source_notes)),other,research,credits);
-        }
-        addOutlineAction(rows,getString(R.string.article_sources),() ->
-                new MaterialAlertDialogBuilder(this).setTitle(R.string.article_sources)
-                        .setMessage(credits.stream().filter(value -> value != null && !value.isEmpty())
-                                .collect(java.util.stream.Collectors.joining("\n\n")))
-                        .setPositiveButton(android.R.string.ok,null).show());
+    private String searchPreview(DictionaryRepository.Hit hit) {
+        var words = new java.util.LinkedHashSet<String>();
+        if (model.reverse() && hit.translation() != null) words.add(hit.translation());
+        words.addAll(hit.alternatives());
+        if (words.isEmpty() && hit.translation() != null) words.add(hit.translation());
+        return words.stream().map(word -> TranslationDisplay.answer(word,true,
+                        LocalDictionaryRepository.isResearchProfile(this))).filter(word -> !word.trim().isEmpty())
+                .distinct().limit(3).collect(java.util.stream.Collectors.joining(", "));
     }
 
-    private static boolean hasStudyAnswer(DictionaryRepository.Sense sense) {
-        return sense.translations().stream().anyMatch(word -> !word.trim().isEmpty());
+    private void renderEntry(LinearLayout rows,FoundationViewModel.DictionaryView view) {
+        var entry = view.entry();
+        var sense = ArticleDisplay.selectedSense(entry,model.selectedSense());
+        var translations = ArticleDisplay.translations(sense,view.corpusVersion()!=null
+                && view.corpusVersion().startsWith("research-"));
+        View hero = getLayoutInflater().inflate(R.layout.article_hero,rows,false);
+        ((TextView)hero.findViewById(R.id.article_word)).setText(entry.spelling());
+        TextView translation = hero.findViewById(R.id.article_translation);
+        translation.setText(translations.isEmpty() ? getString(R.string.article_no_translation) : translations.get(0));
+        TextView variants = hero.findViewById(R.id.article_variants);
+        variants.setVisibility(translations.size() < 2 ? View.GONE : View.VISIBLE);
+        if (translations.size() > 1) variants.setText(getString(R.string.article_variants,String.join(", ",translations)));
+        addPronunciation(hero.findViewById(R.id.article_word_line),entry.spelling(),entry.language());
+        if (view.synthetic()) addDetail(hero.findViewById(R.id.article_hero_content),getString(R.string.dictionary_synthetic));
+        if (entry.senses().size() > 1) {
+            addTextAction(hero.findViewById(R.id.article_hero_content),R.string.article_other_translations,
+                    () -> chooseMeaning(entry,sense,view));
+        }
+        rows.addView(hero);
+
+        var metadata = new java.util.ArrayList<>(entry.metadata());
+        if (sense != null) metadata.addAll(sense.metadata());
+        var definitions = metadataValues(metadata,"definition");
+        if (!definitions.isEmpty()) addDetail(addBlock(rows,getString(R.string.article_definition)),
+                String.join("\n\n",definitions));
+
+        var pronunciations = metadataValues(metadata,"ipa","pronunciation");
+        if (!pronunciations.isEmpty()) addTranscriptions(rows,pronunciations);
+
+        String pos = localPartOfSpeech(entry.pos());
+        if (!pos.isEmpty()) addDetail(rows,getString(R.string.article_pos,pos));
+        var levels = metadataValues(metadata,"cefr");
+        if (!levels.isEmpty()) addDetail(rows,getString(R.string.article_level,String.join(" · ",levels)));
+        if (hasArticleDetails(entry,sense,metadata)) {
+            addTextAction(rows,R.string.article_more,() -> showArticleDetails(entry,sense,metadata));
+        }
+        var add = addAction(rows,getString(view.added() ? R.string.word_in_vocabulary : R.string.add_word),
+                () -> model.addWord(view,sense));
+        add.setEnabled(!view.added());
+        addTextAction(rows,R.string.article_sources,() -> showArticleSources(entry));
+    }
+
+    private void chooseMeaning(DictionaryRepository.Entry entry,DictionaryRepository.Sense selected,
+                               FoundationViewModel.DictionaryView view) {
+        boolean research = view.corpusVersion()!=null && view.corpusVersion().startsWith("research-");
+        var senses = entry.senses();
+        var labels = senses.stream().map(value -> {
+            String text = String.join(", ",ArticleDisplay.translations(value,research));
+            if (text.isEmpty()) text = getString(R.string.article_no_translation);
+            var definitions = metadataValues(value.metadata(),"definition");
+            if (!definitions.isEmpty()) text += "\n" + definitions.iterator().next();
+            return text;
+        }).toArray(CharSequence[]::new);
+        new MaterialAlertDialogBuilder(this).setTitle(R.string.article_other_translations)
+                .setSingleChoiceItems(labels,senses.indexOf(selected),(dialog,index) -> {
+                    dialog.dismiss();
+                    if (senses.get(index) != selected) model.select(entry.id(),senses.get(index).id());
+                }).setNegativeButton(android.R.string.cancel,null).show();
+    }
+
+    private static java.util.Set<String> metadataValues(java.util.List<DictionaryRepository.Metadata> metadata,
+                                                         String... kinds) {
+        var values = new java.util.LinkedHashSet<String>();
+        for (var item : metadata) {
+            if (java.util.Arrays.asList(kinds).contains(item.kind()) && !item.value().trim().isEmpty()) values.add(item.value());
+        }
+        return values;
+    }
+
+    private void addTranscriptions(LinearLayout rows,java.util.Set<String> values) {
+        String full = String.join(" · ",values);
+        var label = inflateArticleDetail(rows);
+        label.setText(R.string.article_pronunciations);
+        rows.addView(label);
+        var text = inflateArticleDetail(rows);
+        text.setId(R.id.article_transcriptions);
+        text.setTextIsSelectable(false);
+        text.setText(full);
+        text.setMaxLines(2);
+        text.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        rows.addView(text);
+        text.post(() -> {
+            var layout = text.getLayout();
+            if (layout == null || layout.getLineCount() == 0
+                    || layout.getEllipsisCount(layout.getLineCount()-1) == 0) return;
+            text.setTextColor(getColor(R.color.blue));
+            text.setOnClickListener(v -> new MaterialAlertDialogBuilder(this).setTitle(R.string.article_pronunciations)
+                    .setMessage(full).setPositiveButton(android.R.string.ok,null).show());
+            ViewCompat.replaceAccessibilityAction(text,androidx.core.view.accessibility.AccessibilityNodeInfoCompat
+                    .AccessibilityActionCompat.ACTION_CLICK,getString(R.string.article_show_pronunciations),null);
+        });
+    }
+
+    private static boolean hasArticleDetails(DictionaryRepository.Entry entry,DictionaryRepository.Sense sense,
+                                             java.util.List<DictionaryRepository.Metadata> metadata) {
+        return !entry.forms().isEmpty() || (sense != null && (sense.context() != null || !sense.examples().isEmpty()))
+                || !metadataValues(metadata,"usage_example","style","region","source_gloss").isEmpty();
+    }
+
+    private void showArticleDetails(DictionaryRepository.Entry entry,DictionaryRepository.Sense sense,
+                                    java.util.List<DictionaryRepository.Metadata> metadata) {
+        var details = new java.util.ArrayList<String>();
+        if (!entry.forms().isEmpty()) {
+            var forms = new java.util.LinkedHashSet<String>();
+            for (var form : entry.forms()) forms.add(form.grammar() == null ? form.spelling()
+                    : form.spelling()+" · "+localGrammar(form.grammar()));
+            details.add(getString(R.string.word_forms)+"\n"+String.join("\n",forms));
+        }
+        details.addAll(metadataValues(metadata,"style","region","source_gloss"));
+        if (sense != null) {
+            if (sense.context() != null) details.add(sense.context().text());
+            for (var example : sense.examples()) details.add(example.translation() == null ? example.body()
+                    : example.body()+"\n"+example.translation());
+        }
+        var examples = metadataValues(metadata,"usage_example");
+        if (!examples.isEmpty()) details.add(getString(R.string.article_examples)+"\n"+String.join("\n\n",examples));
+        new MaterialAlertDialogBuilder(this).setTitle(R.string.article_more)
+                .setMessage(String.join("\n\n",details)).setPositiveButton(android.R.string.ok,null).show();
+    }
+
+    private void showArticleSources(DictionaryRepository.Entry entry) {
+        var credits = new java.util.LinkedHashSet<String>();
+        credits.add(entry.attribution());
+        for (var item : entry.metadata()) credits.add(item.attribution());
+        for (var form : entry.forms()) credits.add(form.attribution());
+        for (var sense : entry.senses()) {
+            credits.add(sense.attribution());
+            for (var item : sense.metadata()) credits.add(item.attribution());
+            for (var example : sense.examples()) credits.add(example.attribution());
+            if (sense.context() != null) credits.add(sense.context().attribution());
+        }
+        credits.remove(null);
+        credits.remove("");
+        new MaterialAlertDialogBuilder(this).setTitle(R.string.article_sources)
+                .setMessage(String.join("\n\n",credits)).setPositiveButton(android.R.string.ok,null).show();
     }
 
     private String localPartOfSpeech(String pos) {
@@ -400,22 +447,43 @@ public final class MainActivity extends AppCompatActivity {
             case "v", "verb" -> getString(R.string.pos_verb);
             case "adj", "adjective" -> getString(R.string.pos_adjective);
             case "adv", "adverb" -> getString(R.string.pos_adverb);
-            default -> pos;
+            case "numeral", "num" -> getString(R.string.pos_numeral);
+            case "pronoun", "pron" -> getString(R.string.pos_pronoun);
+            case "conjunction", "conj" -> getString(R.string.pos_conjunction);
+            case "determiner", "det" -> getString(R.string.pos_determiner);
+            case "interjection", "intj" -> getString(R.string.pos_interjection);
+            case "particle" -> getString(R.string.pos_particle);
+            case "preposition", "prep" -> getString(R.string.pos_preposition);
+            case "postposition" -> getString(R.string.pos_postposition);
+            case "phrase", "phraseologicalUnit" -> getString(R.string.pos_phrase);
+            case "proverb" -> getString(R.string.pos_proverb);
+            default -> "";
         };
     }
 
-    private void updatePronunciationButton() {
-        if (pronunciationButton != null) {
-            pronunciationButton.setVisibility(pronunciation.available() ? View.VISIBLE : View.GONE);
-        }
+    private void addPronunciation(LinearLayout line,String spelling,String language) {
+        if (!"en".equals(language)) return;
+        if (pronunciation == null) pronunciation = new OfflinePronunciation(this,this::updatePronunciationControls);
+        View icon = getLayoutInflater().inflate(R.layout.pronunciation_icon,line,false);
+        icon.setContentDescription(getString(R.string.pronounce_spelling,spelling));
+        icon.setOnClickListener(v -> {
+            if (!pronunciation.speak(spelling)) Toast.makeText(this,R.string.pronunciation_error,Toast.LENGTH_SHORT).show();
+        });
+        pronunciationControls.add(icon);
+        icon.setVisibility(pronunciation.available() ? View.VISIBLE : View.GONE);
+        line.addView(icon);
+    }
+
+    private void updatePronunciationControls() {
+        for (View control : pronunciationControls) control.setVisibility(pronunciation.available() ? View.VISIBLE : View.GONE);
+    }
+
+    private void addTextAction(LinearLayout rows,int label,Runnable action) {
+        addAction(rows,R.layout.text_action_row,getString(label),action);
     }
 
     private TextView inflateArticleDetail(LinearLayout rows) {
         return (TextView)getLayoutInflater().inflate(R.layout.article_detail,rows,false);
-    }
-
-    private static boolean primaryArticleMetadata(DictionaryRepository.Metadata value) {
-        return "ipa".equals(value.kind()) || "pronunciation".equals(value.kind()) || "cefr".equals(value.kind());
     }
 
     private String localGrammar(String value) {
@@ -430,33 +498,6 @@ public final class MainActivity extends AppCompatActivity {
             case "Superlative" -> getString(R.string.grammar_superlative);
             default -> value;
         };
-    }
-
-    private void addMetadata(LinearLayout rows,java.util.List<DictionaryRepository.Metadata> metadata,
-                             boolean sourceEntryNotes,java.util.Set<String> credits) {
-        for (var value : metadata) {
-            int label = switch (value.kind()) {
-                case "ipa" -> R.string.metadata_ipa;
-                case "pronunciation" -> R.string.metadata_pronunciation;
-                case "region" -> R.string.metadata_region;
-                case "style" -> R.string.metadata_style;
-                case "definition" -> sourceEntryNotes ? R.string.research_definition_note : R.string.metadata_definition;
-                case "source_gloss" -> R.string.metadata_gloss;
-                case "cefr" -> R.string.metadata_cefr;
-                case "usage_example" -> R.string.source_usage_example;
-                case "grammar" -> R.string.metadata_grammar;
-                default -> 0;
-            };
-            if (label == 0) continue;
-            TextView detail = inflateArticleDetail(rows);
-            String text = value.form() == null ? value.value() : value.form() + " · " + value.value();
-            credits.add(value.attribution());
-            // Independent examples carry separate credits for the two texts.
-            detail.setText(value.kind().equals("usage_example")
-                    ? getString(R.string.metadata_line,getString(label),text,value.attribution())
-                    : getString(R.string.metadata_content,getString(label),text));
-            rows.addView(detail);
-        }
     }
 
     private void renderPersonal() {

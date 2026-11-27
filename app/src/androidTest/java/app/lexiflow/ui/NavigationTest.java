@@ -113,12 +113,14 @@ public class NavigationTest {
             String draft = "ДЕМО-ОБЪЕКТ";
             onView(withId(R.id.query)).perform(click(),replaceText(draft),closeSoftKeyboard());
             awaitDictionary(scenario);
-            var result = withText(startsWith("zeta-demo · noun · Значение 1"));
+            var result = allOf(withId(R.id.result_word),withText("zeta-demo"));
             onView(result).perform(scrollTo(),click());
             awaitDictionary(scenario);
-            onView(withId(R.id.title)).check(matches(withText(R.string.entry)));
-            onView(withId(R.id.panel_title)).check(matches(withText("zeta-demo")));
-            onView(withId(R.id.entry_forms)).check(matches(withText(containsString("zeta-demos"))));
+            onView(withId(R.id.title)).check(matches(withEffectiveVisibility(Visibility.GONE)));
+            onView(withId(R.id.article_word)).check(matches(withText("zeta-demo")));
+            onView(withText(R.string.article_more)).perform(scrollTo(),click());
+            onView(withText(containsString("zeta-demos"))).check(matches(isDisplayed()));
+            onView(withText(android.R.string.ok)).perform(click());
             onView(withContentDescription(R.string.back)).perform(click());
             awaitDictionary(scenario);
             onView(withId(R.id.query)).check(matches(withText(draft)));
@@ -136,12 +138,12 @@ public class NavigationTest {
             onView(withId(R.id.query)).perform(click(), replaceText("outdated search"), replaceText(draft), closeSoftKeyboard());
             awaitDictionary(scenario);
             if (available[0]) {
-                onView(withText(startsWith("zeta demo phrase · phrase · Значение 1"))).perform(scrollTo(),click());
+                onView(allOf(withId(R.id.result_word),withText("zeta demo phrase"))).perform(scrollTo(),click());
             } else {
                 onView(withId(R.id.action)).perform(scrollTo(), click());
             }
             scenario.recreate();
-            onView(withId(R.id.title)).check(matches(withText(R.string.entry)));
+            onView(withId(R.id.title)).check(matches(withEffectiveVisibility(Visibility.GONE)));
             onView(withContentDescription(R.string.back)).perform(click());
             onView(withId(R.id.title)).check(matches(withText(R.string.dictionary)));
             onView(withId(R.id.query)).check(matches(withText(draft)));
@@ -211,7 +213,7 @@ public class NavigationTest {
             scenario.moveToState(Lifecycle.State.RESUMED);
             awaitDictionary(scenario);
             onView(withId(R.id.query)).check(matches(withText("демо-объект")));
-            onView(withText(startsWith("zeta-demo · noun · Значение 1"))).check(matches(isDisplayed()));
+            onView(allOf(withId(R.id.result_word),withText("zeta-demo"))).check(matches(isDisplayed()));
         }
     }
 

@@ -33,12 +33,14 @@ public class DesignPreviewTest {
         assertFalse(target.getDatabasePath(personalName).exists());
         var repository = new LocalDictionaryRepository(target);
         var personal = Room.databaseBuilder(target,PersonalDatabase.class,personalName).build();
+        String previewSense;
         try (var json = target.getAssets().open("dictionary-design-preview/manifest.json");
              var db = target.getAssets().open("dictionary-design-preview/dictionary.sqlite")) {
             repository.install(json,db);
             assertTrue(repository.isSynthetic());
             var hit = repository.search(HEADWORD,false).stream().filter(row -> "noun".equals(row.pos()))
                     .findFirst().orElseThrow(AssertionError::new);
+            previewSense = hit.senseId();
             var article = repository.entry(hit.entryId());
             assertEquals(3,article.senses().size());
             assertEquals(2,article.senses().get(0).translations().size());
@@ -83,7 +85,7 @@ public class DesignPreviewTest {
             onView(withId(R.id.query)).perform(click(),replaceText(HEADWORD),closeSoftKeyboard());
             NavigationTest.awaitDictionary(scenario);
             capture(scenario,"02-results");
-            onView(withText(startsWith(HEADWORD+" · noun · Значение 1"))).perform(scrollTo(),click());
+            onView(withTagValue(org.hamcrest.Matchers.is((Object)previewSense))).perform(scrollTo(),click());
             NavigationTest.awaitDictionary(scenario);
             capture(scenario,"03-entry");
             onView(withContentDescription(R.string.back)).perform(click());
@@ -114,13 +116,9 @@ public class DesignPreviewTest {
             onView(withContentDescription(R.string.back)).perform(click());
             onView(withId(R.id.search)).perform(click());
             NavigationTest.awaitDictionary(scenario);
-            onView(withText(startsWith(HEADWORD+" · noun · Значение 1"))).perform(scrollTo(),click());
+            onView(withTagValue(org.hamcrest.Matchers.is((Object)previewSense))).perform(scrollTo(),click());
             NavigationTest.awaitDictionary(scenario);
-            onView(withText(target.getString(R.string.study_add_sense,1))).perform(scrollTo(),click());
-            await(scenario,state -> state.screen() == Screen.STUDY && state.exercise() != null
-                    && !state.exercise().reverse && HEADWORD.equals(state.exercise().spelling),"article starts exact card");
-            onView(withText(R.string.reveal)).perform(scrollTo(),click());
-            onView(withId(R.id.body)).check(matches(withText("Личный вариант для макета")));
+            onView(withText(R.string.word_in_vocabulary)).check(matches(org.hamcrest.Matchers.not(isEnabled())));
         }
     }
 }

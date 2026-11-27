@@ -90,6 +90,8 @@ final class DictionarySearch {
                    + "AND f.search_key=substr(g.best,2) AND substr(g.best,1,1) IN ('1','3'))")
                 + (bilingual ? ",e.language" : ",'en'")
                 + (bilingual && reverse ? ",substr(g.best,1,1)='2'" : ",0")
+                + ",(SELECT group_concat(wording,char(31)) FROM (SELECT DISTINCT t.wording FROM translation t"
+                + " WHERE t.sense_id=s.id ORDER BY t.id LIMIT 3))"
                 + " FROM selected g JOIN sense s ON s.id=g.sense_id"
                 + " JOIN entry e ON e.id=s.entry_id ORDER BY g.best,e.id,s.position,s.id";
         return new Query(sql,arguments.toArray(new String[0]));

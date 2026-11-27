@@ -25,7 +25,13 @@ import java.util.function.Consumer;
 public final class FoundationViewModel extends ViewModel {
     private final SavedStateHandle state;
     record DictionaryView(DictionaryRepository.Status status, boolean synthetic,
-                          List<DictionaryRepository.Hit> hits, DictionaryRepository.Entry entry, String corpusVersion) {}
+                          List<DictionaryRepository.Hit> hits, DictionaryRepository.Entry entry, String corpusVersion,
+                          boolean added) {
+        DictionaryView(DictionaryRepository.Status status,boolean synthetic,List<DictionaryRepository.Hit> hits,
+                       DictionaryRepository.Entry entry,String corpusVersion) {
+            this(status,synthetic,hits,entry,corpusVersion,false);
+        }
+    }
     private LocalDictionaryRepository dictionary;
     private PersonalDatabase personal;
     private Handler main;
@@ -83,6 +89,7 @@ public final class FoundationViewModel extends ViewModel {
         final int current = ++request;
         final String text = query();
         final String entryId = state.get("entryId");
+        final String senseId = selectedSense();
         final boolean reverse = reverse();
         final Screen screen = screen();
         if (screen != Screen.SEARCH && screen != Screen.ENTRY && screen != Screen.SETTINGS) {
@@ -97,7 +104,8 @@ public final class FoundationViewModel extends ViewModel {
                 dictionary.load();
                 List<DictionaryRepository.Hit> hits = screen == Screen.SEARCH ? dictionary.search(text,reverse) : Collections.emptyList();
                 DictionaryRepository.Entry entry = screen == Screen.ENTRY && entryId != null ? dictionary.entry(entryId) : null;
-                result = new DictionaryView(dictionary.status(),dictionary.isSynthetic(),hits,entry,dictionary.corpusVersion());
+                boolean added = entry != null && isAdded(personal.library(),entry,ArticleDisplay.selectedSense(entry,senseId));
+                result = new DictionaryView(dictionary.status(),dictionary.isSynthetic(),hits,entry,dictionary.corpusVersion(),added);
             } catch (RuntimeException failure) {
                 result = new DictionaryView(DictionaryRepository.Status.ERROR,false,Collections.emptyList(),null,null);
             }
@@ -214,13 +222,34 @@ public final class FoundationViewModel extends ViewModel {
         return days;
     }
 
-    void save(DictionaryRepository.Entry entry, DictionaryRepository.Sense sense) {
-        var item = savedItem(entry,sense);
-        changePersonal(library -> notifyResult(library.save(item) == -1 ? R.string.already_saved : R.string.saved_notice));
+    private static boolean isAdded(PersonalDatabase.Library library,DictionaryRepository.Entry entry,
+                                   DictionaryRepository.Sense sense) {
+        long id = library.savedId(entry.id(),sense == null ? "" : sense.id());
+        return id > 0 && (ArticleDisplay.translations(sense,false).isEmpty() || library.hasStudyCard(id));
     }
 
-    void learn(DictionaryRepository.Entry entry,DictionaryRepository.Sense sense) {
-        learn(savedItem(entry,sense));
+    void addWord(DictionaryView view,DictionaryRepository.Sense sense) {
+        if (worker == null || view.added() || view != dictionaryView.getValue() || screen() != Screen.ENTRY) return;
+        var entry = view.entry();
+        var item = savedItem(entry,sense);
+        boolean hasAnswer = !ArticleDisplay.translations(sense,false).isEmpty();
+        worker.execute(() -> {
+            try {
+                var library = personal.library();
+                if (!isAdded(library,entry,sense)) {
+                    if (hasAnswer) library.learn(item,System.currentTimeMillis());
+                    else library.save(item);
+                }
+                main.post(() -> {
+                    if (disposed || screen() != Screen.ENTRY || view != dictionaryView.getValue()) return;
+                    dictionaryView.setValue(new DictionaryView(view.status(),view.synthetic(),view.hits(),
+                            entry,view.corpusVersion(),true));
+                    notice.setValue(hasAnswer ? R.string.word_added_for_study : R.string.saved_notice);
+                });
+            } catch (RuntimeException failure) {
+                notifyResult(R.string.personal_error);
+            }
+        });
     }
 
     void learn(PersonalDatabase.Saved item) {

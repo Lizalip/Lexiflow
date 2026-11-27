@@ -746,9 +746,13 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
     private List<Hit> queryHits(DictionarySearch.Query query) {
         List<Hit> results = new ArrayList<>();
         try (Cursor cursor = database.rawQuery(query.sql(),query.arguments())) {
-            while (cursor.moveToNext()) results.add(new Hit(cursor.getString(0),cursor.getString(1),
-                    cursor.getString(2),cursor.getString(3),cursor.getInt(4),cursor.getString(5),cursor.getString(6),
-                    cursor.getString(7),cursor.getInt(8)!=0));
+            while (cursor.moveToNext()) {
+                String alternatives = cursor.getString(9);
+                results.add(new Hit(cursor.getString(0),cursor.getString(1),
+                        cursor.getString(2),cursor.getString(3),cursor.getInt(4),cursor.getString(5),cursor.getString(6),
+                        cursor.getString(7),cursor.getInt(8)!=0,alternatives == null ? Collections.emptyList()
+                                : java.util.Arrays.asList(alternatives.split("\u001f"))));
+            }
         }
         return results;
     }

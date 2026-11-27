@@ -48,23 +48,54 @@ public class RealResearchFlowTest {
         assertFalse(target.getDatabasePath("lexiflow-personal.sqlite").exists());
         long launch = SystemClock.elapsedRealtime();
         try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
+            scenario.onActivity(activity -> activity.getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON));
             awaitAvailable(scenario,120);
             Log.i(TAG,"demonstration dictionary available ms="+(SystemClock.elapsedRealtime()-launch));
             capture(scenario,"01-dictionary");
+            onView(withId(R.id.vocabulary)).perform(click());
+            await(scenario,state -> state.screen()==Screen.VOCABULARY && state.savedCount()==0,"vocabulary is empty");
+            onView(withText(R.string.no_words)).check(matches(isDisplayed()));
+            scenario.onActivity(activity -> {
+                android.widget.LinearLayout rows = activity.findViewById(R.id.results);
+                assertEquals(activity.findViewById(R.id.action).getWidth(),rows.getChildAt(0).getWidth());
+                assertEquals(activity.findViewById(R.id.action).getHeight(),rows.getChildAt(0).getHeight());
+            });
+            onView(withId(R.id.action)).perform(scrollTo(),click());
+            await(scenario,state -> state.screen()==Screen.COLLECTIONS,"empty vocabulary opens collections");
+            back();
+            action(R.string.study_find_word);
+            awaitAvailable(scenario);
             query("book");
             awaitAvailable(scenario);
             var hit = view(scenario).hits().stream()
                     .filter(row -> "book".equals(row.spelling()) && "n".equals(row.pos()) && row.translation()!=null)
                     .findFirst().orElseThrow(AssertionError::new);
-            String label = "book · n · " + target.getString(R.string.sense_title,hit.position())
-                    + "\n" + TranslationDisplay.wording(hit.translation());
+
             capture(scenario,"02-results");
-            onView(withText(label)).perform(scrollTo(),click());
+            var sound = org.hamcrest.Matchers.allOf(withContentDescription(target.getString(R.string.pronounce_spelling,"book")),
+                    isDescendantOfA(withTagValue(org.hamcrest.Matchers.is((Object)hit.senseId()))),isDisplayed());
+            try {
+                onView(sound).perform(scrollTo(),click());
+                result(hit).check(matches(isDisplayed()));
+                Log.i(TAG,"compact search audio tapped without opening the article");
+            } catch (androidx.test.espresso.NoMatchingViewException unavailable) {
+                Log.i(TAG,"offline voice unavailable for UI audio check");
+            }
+            result(hit).perform(scrollTo(),click());
             awaitAvailable(scenario);
             var sense = view(scenario).entry().senses().stream().filter(row -> row.id().equals(hit.senseId()))
                     .findFirst().orElseThrow(AssertionError::new);
+            onView(withId(R.id.title)).check(matches(withEffectiveVisibility(Visibility.GONE)));
+            onView(withId(R.id.article_translation)).check(matches(withText(ArticleDisplay.translations(sense,true).get(0))));
             capture(scenario,"03-entry");
-            onView(withText(target.getString(R.string.study_add_sense,sense.position()))).perform(scrollTo(),click());
+            action(R.string.add_word);
+            awaitDictionary(scenario,FoundationViewModel.DictionaryView::added,"added from article");
+            onView(withText(R.string.word_in_vocabulary)).check(matches(org.hamcrest.Matchers.not(isEnabled())));
+            back();
+            awaitAvailable(scenario);
+            onView(withId(R.id.review)).perform(click());
+            await(scenario,state -> state.screen()==Screen.REVIEW && state.learning().unstudied==1,"single new card");
+            onView(withText(target.getString(R.string.study_new_count,1))).perform(scrollTo(),click());
             await(scenario,state -> state.screen()==Screen.STUDY && state.exercise()!=null
                     && state.exercise().entryId.equals(hit.entryId()),"real article opened its card");
             capture(scenario,"06-review-front");
@@ -72,6 +103,7 @@ public class RealResearchFlowTest {
             String answer = TranslationDisplay.answer(String.join(" · ",sense.translations()),true,true);
             onView(withId(R.id.body)).check(matches(withText(answer)));
             scenario.recreate();
+            scenario.onActivity(activity -> activity.getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON));
             await(scenario,state -> state.screen()==Screen.STUDY && state.exercise()!=null,"real card restored");
             onView(withId(R.id.body)).check(matches(withText(answer)));
             capture(scenario,"07-review-answer");
@@ -83,6 +115,14 @@ public class RealResearchFlowTest {
             action(R.string.study_home);
             await(scenario,state -> state.screen()==Screen.REVIEW && state.learning().nextDue!=null,"next review scheduled");
             capture(scenario,"11-learning");
+            onView(withId(R.id.search)).perform(click());
+            awaitAvailable(scenario);
+            result(hit).perform(scrollTo(),click());
+            awaitDictionary(scenario,FoundationViewModel.DictionaryView::added,"reopened learned value stays added");
+            onView(withText(R.string.word_in_vocabulary)).perform(scrollTo())
+                    .check(matches(org.hamcrest.Matchers.not(isEnabled())));
+            back();
+            awaitAvailable(scenario);
             onView(withId(R.id.progress)).perform(click());
             await(scenario,state -> state.screen()==Screen.PROGRESS && state.reviewed()==1
                     && state.successful()==1 && state.savedCount()==1
@@ -90,6 +130,8 @@ public class RealResearchFlowTest {
             capture(scenario,"08-progress");
             onView(withId(R.id.vocabulary)).perform(click());
             await(scenario,state -> state.screen()==Screen.VOCABULARY && state.savedCount()==1,"saved meaning in vocabulary");
+            onView(withId(R.id.saved_query)).perform(replaceText("book"));
+            await(scenario,state -> state.savedQuery().equals("book") && state.rowCount()==1,"search finds saved word");
             onView(withText(startsWith("book · "))).perform(scrollTo(),click());
             onView(withText(target.getResources().getStringArray(R.array.saved_actions)[1])).perform(click());
             onView(withHint(R.string.custom_translation)).perform(replaceText(CUSTOM));
@@ -123,12 +165,33 @@ public class RealResearchFlowTest {
                 var kitchen = view(scenario).hits().stream()
                         .filter(row -> "kitchen".equals(row.spelling()) && "n".equals(row.pos()) && row.translation()!=null)
                         .findFirst().orElseThrow(AssertionError::new);
-                String kitchenLabel = "kitchen · n · " + target.getString(R.string.sense_title,kitchen.position())
-                        + "\n" + TranslationDisplay.wording(kitchen.translation());
-                onView(withText(kitchenLabel)).perform(scrollTo(),click());
+
+                result(kitchen).perform(scrollTo(),click());
                 awaitAvailable(scenario);
-                onView(withText(containsString("The kitchen is downstairs."))).perform(scrollTo()).check(matches(isDisplayed()));
+                action(R.string.article_more);
+                onView(withText(containsString("The kitchen is downstairs."))).check(matches(isDisplayed()));
                 capture(scenario,"12-attributed-example");
+                onView(withText(android.R.string.ok)).perform(click());
+                back();
+                openDemoEntry(scenario,"one","numeral");
+                onView(withText(R.string.article_definition)).check(matches(isDisplayed()));
+                onView(withId(R.id.article_variants)).check(matches(withText(containsString("оди́н"))));
+                scenario.onActivity(activity -> {
+                    android.widget.TextView text = activity.findViewById(R.id.article_transcriptions);
+                    assertEquals(2,text.getMaxLines());
+                    assertTrue(text.getText().toString().split(" · ").length > 3);
+                });
+                capture(scenario,"13-one");
+                back();
+                openDemoEntry(scenario,"blackboard","n");
+                onView(withText(R.string.article_definition)).check(doesNotExist());
+                back();
+                awaitAvailable(scenario);
+                onView(withId(R.id.direction)).perform(click());
+                openDemoEntry(scenario,"дом","n");
+                onView(withId(R.id.article_transcriptions)).check(doesNotExist());
+                onView(withText(startsWith("Уровень CEFR"))).check(doesNotExist());
+                onView(withContentDescription(target.getString(R.string.pronounce_spelling,"дом"))).check(doesNotExist());
             }
         }
     }
@@ -160,22 +223,21 @@ public class RealResearchFlowTest {
             var hit = view(scenario).hits().stream()
                     .filter(row -> row.spelling().equals("book") && "n".equals(row.pos()))
                     .findFirst().orElseThrow(AssertionError::new);
-            String label=hit.spelling()+" · "+hit.pos()+" · "+target.getString(R.string.sense_title,hit.position())
-                    +"\n"+TranslationDisplay.wording(hit.translation());
-            onView(withText(label)).check(matches(isDisplayed()));
+
+            result(hit).check(matches(isDisplayed()));
             Log.i(TAG,"book input with debounce and rendered match ms="+(SystemClock.elapsedRealtime()-typed));
             capture(scenario,"02-results");
-            onView(withText(label)).perform(scrollTo(),click());
+            result(hit).perform(scrollTo(),click());
             awaitAvailable(scenario);
             var article = view(scenario).entry();
             assertNotNull(article);
             assertTrue(article.senses().size()>1);
             var ipa = article.metadata().stream().filter(row -> row.kind().equals("ipa")).findFirst().orElseThrow();
-            onView(withText(target.getString(R.string.metadata_content,target.getString(R.string.metadata_ipa),
-                    ipa.value()))).perform(scrollTo()).check(matches(isDisplayed()));
+            onView(withId(R.id.article_transcriptions)).check(matches(withText(containsString(ipa.value()))));
             assertTrue(article.metadata().stream().anyMatch(row -> row.kind().equals("definition")));
             capture(scenario,"03-entry");
-            onView(withText(target.getString(R.string.save_sense,hit.position()))).perform(scrollTo(),click());
+            action(R.string.add_word);
+            awaitDictionary(scenario,FoundationViewModel.DictionaryView::added,"word added");
             back();
             onView(withId(R.id.vocabulary)).perform(click());
             await(scenario,state -> state.savedCount()==1,"saved real sense");
@@ -285,16 +347,16 @@ public class RealResearchFlowTest {
             assertEquals(word,hit.spelling());
             assertEquals("ru",hit.language());
             assertNotNull(hit.translation());
-            String label=hit.spelling()+" · "+hit.pos()+" · "+target.getString(R.string.sense_title,hit.position())
-                    +"\n"+TranslationDisplay.wording(hit.translation())+"\n"+target.getString(R.string.direct_russian_article);
-            onView(withText(label)).perform(scrollTo(),click());
+
+            result(hit).perform(scrollTo(),click());
             awaitDictionary(scenario,state -> state.entry()!=null,"direct article opened");
             var article = view(scenario).entry();
             assertEquals("ru",article.language());
             assertEquals(word,article.spelling());
             assertTrue(article.attribution().contains("RU–EN"));
-            onView(withText(R.string.pronounce_offline)).check(doesNotExist());
-            onView(withText(target.getString(R.string.save_sense,hit.position()))).perform(scrollTo(),click());
+            onView(withContentDescription(target.getString(R.string.pronounce_spelling,word))).check(doesNotExist());
+            action(R.string.add_word);
+            awaitDictionary(scenario,FoundationViewModel.DictionaryView::added,"word added");
             back();
             onView(withId(R.id.vocabulary)).perform(click());
             await(scenario,state -> state.savedCount()==2 && state.saved().stream().anyMatch(row ->
@@ -378,8 +440,7 @@ public class RealResearchFlowTest {
             }
             var hit = view(scenario).hits().stream().filter(row -> "book".equals(row.spelling()) && "n".equals(row.pos()))
                     .findFirst().orElseThrow();
-            onView(withText("book · n · "+target.getString(R.string.sense_title,hit.position())
-                    +"\n"+TranslationDisplay.wording(hit.translation()))).perform(scrollTo(),click());
+            result(hit).perform(scrollTo(),click());
             awaitDictionary(scenario,state -> state.entry()!=null,"CEFR article displayed");
             action(R.string.article_sources);
             onView(withText(containsString("CEFR-J Wordlist Version 1.6"))).check(matches(isDisplayed()));
@@ -399,8 +460,7 @@ public class RealResearchFlowTest {
                     "chance".equals(row.spelling()) && "n".equals(row.pos())),"example article available");
             var hit = view(scenario).hits().stream().filter(row -> "chance".equals(row.spelling()) && "n".equals(row.pos()))
                     .findFirst().orElseThrow();
-            onView(withText("chance · n · "+target.getString(R.string.sense_title,hit.position())
-                    +"\n"+TranslationDisplay.wording(hit.translation()))).perform(scrollTo(),click());
+            result(hit).perform(scrollTo(),click());
             awaitDictionary(scenario,state -> state.entry()!=null,"article with example opened");
             var article = view(scenario).entry();
             var usage = article.metadata().stream().filter(row -> "usage_example".equals(row.kind()))
@@ -408,8 +468,8 @@ public class RealResearchFlowTest {
             assertEquals(2,usage.value().split("\n").length);
             assertEquals(2,usage.attribution().split("tatoeba.org/en/sentences/show/",-1).length-1);
             assertTrue(article.senses().stream().allMatch(row -> row.examples().isEmpty()));
-            onView(withText(startsWith(target.getString(R.string.source_usage_example))))
-                    .perform(scrollTo()).check(matches(isDisplayed()));
+            action(R.string.article_more);
+            onView(withText(containsString(usage.value()))).check(matches(isDisplayed()));
         }
     }
 
@@ -431,8 +491,7 @@ public class RealResearchFlowTest {
                     "chance".equals(row.spelling()) && "n".equals(row.pos())),"example owner available");
             var hit = view(scenario).hits().stream().filter(row -> "chance".equals(row.spelling()) && "n".equals(row.pos()))
                     .findFirst().orElseThrow();
-            onView(withText("chance · n · "+target.getString(R.string.sense_title,hit.position())
-                    +"\n"+TranslationDisplay.wording(hit.translation()))).perform(scrollTo(),click());
+            result(hit).perform(scrollTo(),click());
             awaitDictionary(scenario,state -> state.entry()!=null,"rich article loaded");
             var article = view(scenario).entry();
             var usage = article.metadata().stream().filter(row -> "usage_example".equals(row.kind()))
@@ -441,23 +500,23 @@ public class RealResearchFlowTest {
             assertTrue(usage.stream().allMatch(example ->
                     example.attribution().split("tatoeba.org/en/sentences/show/",-1).length==3));
             assertTrue(article.senses().stream().allMatch(row -> row.examples().isEmpty()));
-            onView(withText(startsWith(target.getString(R.string.source_usage_example)+" · "+usage.get(0).value())))
-                    .perform(scrollTo()).check(matches(isDisplayed()));
+            action(R.string.article_more);
+            onView(withText(containsString(usage.get(0).value()))).check(matches(isDisplayed()));
             capture(scenario,"13-attributed-usage");
+            onView(withText(android.R.string.ok)).perform(click());
             back();
             query("went");
             awaitDictionary(scenario,state -> state.hits().stream().anyMatch(row ->
                     "go".equals(row.spelling()) && "went".equals(row.matchedForm())),"inflected English query");
             var found = view(scenario).hits().stream().filter(row -> "go".equals(row.spelling())
                     && "went".equals(row.matchedForm())).findFirst().orElseThrow();
-            onView(withText("go · v · "+target.getString(R.string.sense_title,found.position())
-                    +"\n"+TranslationDisplay.wording(found.translation())+"\n"+target.getString(R.string.matched_form,"went")))
+            result(found)
                     .perform(scrollTo(),click());
             awaitDictionary(scenario,state -> state.entry()!=null,"inflected search opened the lemma");
             assertTrue(view(scenario).entry().forms().stream().anyMatch(row ->
                     "went".equals(row.spelling()) && "Past".equals(row.grammar())));
-            onView(withText(containsString(target.getString(R.string.grammar_past))))
-                    .perform(scrollTo()).check(matches(isDisplayed()));
+            action(R.string.article_more);
+            onView(withText(containsString(target.getString(R.string.grammar_past)))).check(matches(isDisplayed()));
             capture(scenario,"14-grammatical-forms");
         }
         if (expected!=null) {
@@ -497,14 +556,13 @@ public class RealResearchFlowTest {
                     "slowly".equals(row.spelling()) && "adv".equals(row.pos())),"new example owner");
             var hit = view(scenario).hits().stream().filter(row -> "slowly".equals(row.spelling())
                     && "adv".equals(row.pos())).findFirst().orElseThrow();
-            onView(withText("slowly · adv · "+target.getString(R.string.sense_title,hit.position())
-                    +"\n"+TranslationDisplay.wording(hit.translation()))).perform(scrollTo(),click());
+            result(hit).perform(scrollTo(),click());
             awaitDictionary(scenario,state -> state.entry()!=null,"new example article");
             var example = view(scenario).entry().metadata().stream()
                     .filter(row -> "usage_example".equals(row.kind())).findFirst().orElseThrow();
             assertEquals(3,example.attribution().split("tatoeba.org/en/sentences/show/",-1).length);
-            onView(withText(startsWith(target.getString(R.string.source_usage_example)+" · "+example.value())))
-                    .perform(scrollTo()).check(matches(isDisplayed()));
+            action(R.string.article_more);
+            onView(withText(containsString(example.value()))).check(matches(isDisplayed()));
         }
         var repository = new LocalDictionaryRepository(target);
         try {
@@ -534,18 +592,18 @@ public class RealResearchFlowTest {
                     "kitchen".equals(row.spelling()) && "n".equals(row.pos())),"new example owner");
             var hit = view(scenario).hits().stream().filter(row ->
                     "kitchen".equals(row.spelling()) && "n".equals(row.pos())).findFirst().orElseThrow();
-            onView(withText("kitchen · n · "+target.getString(R.string.sense_title,hit.position())
-                    +"\n"+TranslationDisplay.wording(hit.translation()))).perform(scrollTo(),click());
+            result(hit).perform(scrollTo(),click());
             awaitDictionary(scenario,state -> state.entry()!=null,"new example article");
             var examples = view(scenario).entry().metadata().stream()
                     .filter(row -> "usage_example".equals(row.kind()))
                     .collect(java.util.stream.Collectors.toList());
             assertTrue(examples.size()>=2);
+            action(R.string.article_more);
             for (var example : examples) {
                 assertEquals(3,example.attribution().split("tatoeba.org/en/sentences/show/",-1).length);
-                onView(withText(startsWith(target.getString(R.string.source_usage_example)+" · "+example.value())))
-                        .perform(scrollTo()).check(matches(isDisplayed()));
+                onView(withText(containsString(example.value()))).check(matches(isDisplayed()));
             }
+            onView(withText(android.R.string.ok)).perform(click());
             if (version.endsWith("-ru-supplement")) {
                 back();
                 onView(withId(R.id.direction)).perform(click());
@@ -626,16 +684,16 @@ public class RealResearchFlowTest {
                     "new direct Russian sense found");
             var hit = view(scenario).hits().get(0);
             assertEquals("ru",hit.language());
-            String label = hit.spelling()+" · "+hit.pos()+" · "+target.getString(R.string.sense_title,hit.position())
-                    +"\n"+TranslationDisplay.wording(hit.translation())+"\n"+target.getString(R.string.direct_russian_article);
-            onView(withText(label)).check(matches(isDisplayed()));
+
+            result(hit).check(matches(isDisplayed()));
             Log.i(TAG,"new Russian input to visible match ms="+(SystemClock.elapsedRealtime()-typed));
             capture(scenario,"11-expanded-russian-results");
-            onView(withText(label)).perform(scrollTo(),click());
+            result(hit).perform(scrollTo(),click());
             awaitDictionary(scenario,state -> state.entry()!=null && hit.entryId().equals(state.entry().id()),
                     "expanded article opened");
             capture(scenario,"12-expanded-russian-entry");
-            onView(withText(target.getString(R.string.save_sense,hit.position()))).perform(scrollTo(),click());
+            action(R.string.add_word);
+            awaitDictionary(scenario,FoundationViewModel.DictionaryView::added,"word added");
             back();
             onView(withId(R.id.vocabulary)).perform(click());
             await(scenario,state -> state.savedCount()==3 && state.saved().stream()
@@ -934,6 +992,18 @@ public class RealResearchFlowTest {
 
     private static void query(String value) { onView(withId(R.id.query)).perform(click(),replaceText(value),closeSoftKeyboard()); }
     private static void back() { onView(withContentDescription(R.string.back)).perform(click()); }
+    private static androidx.test.espresso.ViewInteraction result(DictionaryRepository.Hit hit) {
+        return onView(withTagValue(org.hamcrest.Matchers.is((Object)hit.senseId())));
+    }
+    private static void openDemoEntry(ActivityScenario<MainActivity> scenario,String spelling,String pos)
+            throws InterruptedException {
+        query(spelling);
+        awaitAvailable(scenario);
+        var hit = view(scenario).hits().stream().filter(row -> spelling.equals(row.spelling()) && pos.equals(row.pos()))
+                .findFirst().orElseThrow(AssertionError::new);
+        result(hit).perform(scrollTo(),click());
+        awaitAvailable(scenario);
+    }
     private static void action(int label) { onView(withText(label)).perform(scrollTo(),click()); }
     private static void savedAction(String action) {
         onView(withText(startsWith("book · "+CUSTOM))).perform(scrollTo(),click());

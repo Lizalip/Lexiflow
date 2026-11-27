@@ -1,0 +1,62 @@
+[
+  {
+    "entry": "2f04f590-08b2-5cfa-b705-58ef394126fd",
+    "capture": "final-decide",
+    "original": 1747551,
+    "translation": 2434967,
+    "relationship": "lemma",
+    "token": "decide",
+    "pos": "v",
+    "reason": "Direct choice addressed to one person"
+  },
+  {
+    "entry": "2f04f590-08b2-5cfa-b705-58ef394126fd",
+    "capture": "final-decide",
+    "original": 3913237,
+    "translation": 5379251,
+    "relationship": "lemma",
+    "token": "decide",
+    "pos": "v",
+    "reason": "Infinitive after let with a matching Russian construction"
+  },
+  {
+    "entry": "2f04f590-08b2-5cfa-b705-58ef394126fd",
+    "capture": "final-decide",
+    "original": 3374123,
+    "translation": 5672828,
+    "relationship": "form",
+    "token": "decided",
+    "pos": "v",
+    "reason": "Past tense question using an indexed form"
+  },
+  {
+    "entry": "30044b5a-3efe-53a9-bcb9-00b374c69c56",
+    "capture": "final-kitchen",
+    "original": 3783102,
+    "translation": 6096223,
+    "relationship": "lemma",
+    "token": "kitchen",
+    "pos": "n",
+    "reason": "Domestic setting with a location predicate"
+  },
+  {
+    "entry": "b9518e11-bfbe-5b6c-bf3e-52fd4699636c",
+    "capture": "final-remember",
+    "original": 3472141,
+    "translation": 6760066,
+    "relationship": "lemma",
+    "token": "remember",
+    "pos": "v",
+    "reason": "Imperative with a direct object"
+  },
+  {
+    "entry": "25cf0672-28ed-5c3a-aabb-5c6ca4b79b4a",
+    "capture": "final-visit",
+    "original": 5958273,
+    "translation": 7470000,
+    "relationship": "form",
+    "token": "visited",
+    "pos": "v",
+    "reason": "Travel example using an indexed past form"
+  }
+]

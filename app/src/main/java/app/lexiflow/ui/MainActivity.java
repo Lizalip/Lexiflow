@@ -48,9 +48,6 @@ public final class MainActivity extends AppCompatActivity {
         super.onCreate(savedState);
         WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
         setContentView(R.layout.activity_main);
-        TextView researchBanner = findViewById(R.id.research_banner);
-        boolean researchProfile = LocalDictionaryRepository.isResearchProfile(this);
-        if (researchProfile) researchBanner.setVisibility(View.VISIBLE);
         View root = findViewById(R.id.root);
         ViewCompat.setOnApplyWindowInsetsListener(root, (view, insets) -> {
             Insets safe = insets.getInsets(WindowInsetsCompat.Type.systemBars()
@@ -100,13 +97,7 @@ public final class MainActivity extends AppCompatActivity {
         findViewById(R.id.action).setOnClickListener(v -> open(model.screen().detail()));
         getOnBackPressedDispatcher().addCallback(this, back);
         findViewById(R.id.direction).setOnClickListener(v -> model.toggleDirection());
-        model.dictionaryView.observe(this, view -> {
-            if (researchProfile && view.corpusVersion() != null) {
-                researchBanner.setText(getString(R.string.research_corpus_version_notice,
-                        getString(R.string.research_corpus_notice),view.corpusVersion()));
-            }
-            renderDictionary();
-        });
+        model.dictionaryView.observe(this, view -> renderDictionary());
         model.activation.observe(this,stage -> {
             var view = model.dictionaryView.getValue();
             if (view != null && view.status() == DictionaryRepository.Status.LOADING) renderDictionary();
@@ -166,6 +157,8 @@ public final class MainActivity extends AppCompatActivity {
             navigation.getMenu().findItem(id).setChecked(true);
         }
         ((TextView) findViewById(R.id.title)).setText(screen.title);
+        findViewById(R.id.research_banner).setVisibility(screen == Screen.SEARCH
+                && LocalDictionaryRepository.isResearchProfile(this) ? View.VISIBLE : View.GONE);
         setTitle(screen.title);
         findViewById(R.id.pair).setVisibility(screen == Screen.SEARCH || screen == Screen.SETTINGS ? View.VISIBLE : View.GONE);
         findViewById(R.id.query_box).setVisibility(screen == Screen.SEARCH ? View.VISIBLE : View.GONE);
@@ -201,6 +194,12 @@ public final class MainActivity extends AppCompatActivity {
                 case CORRUPTED -> R.string.dictionary_corrupted;
                 case INCOMPATIBLE -> R.string.dictionary_incompatible;
             });
+            if (LocalDictionaryRepository.isResearchProfile(this)) {
+                addSectionHeading(rows,getString(R.string.research_details));
+                addDetail(rows,state.corpusVersion() == null ? getString(R.string.research_corpus_notice)
+                        : getString(R.string.research_corpus_version_notice,
+                                getString(R.string.research_corpus_notice),state.corpusVersion()));
+            }
             if (state.status() != DictionaryRepository.Status.LOADING
                     && !LocalDictionaryRepository.isResearchProfile(this)
                     && (getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
@@ -282,10 +281,10 @@ public final class MainActivity extends AppCompatActivity {
     private void renderEntry(LinearLayout rows, TextView heading, TextView body, DictionaryRepository.Entry entry) {
         pronunciationButton = null;
         heading.setText(entry.spelling());
-        body.setText(entry.pos());
+        body.setText(localPartOfSpeech(entry.pos()));
         if (model.dictionaryView.getValue().synthetic()) {
             if (entry.pos() == null) body.setText(R.string.dictionary_synthetic);
-            else body.setText(getString(R.string.dictionary_synthetic_pos,entry.pos()));
+            else body.setText(getString(R.string.dictionary_synthetic_pos,localPartOfSpeech(entry.pos())));
         }
         if ("en".equals(entry.language()) && pronunciation == null) {
             pronunciation = new OfflinePronunciation(this,this::updatePronunciationButton);
@@ -300,7 +299,7 @@ public final class MainActivity extends AppCompatActivity {
         }
         if ("ru".equals(entry.language())) {
             if (pronunciation != null) pronunciation.stop();
-            body.setText(getString(R.string.direct_russian_part_of_speech,entry.pos()));
+            body.setText(getString(R.string.direct_russian_part_of_speech,localPartOfSpeech(entry.pos())));
         }
         boolean research = LocalDictionaryRepository.isResearchProfile(this);
         var ready = entry.senses().stream().filter(MainActivity::hasStudyAnswer)
@@ -313,8 +312,10 @@ public final class MainActivity extends AppCompatActivity {
             body.append("\n" + (research ? TranslationDisplay.wording(first) : first));
             addAction(rows,getString(R.string.study_add_sense,primary.position()),() -> model.learn(entry,primary));
         }
+        var credits = new java.util.LinkedHashSet<String>();
+        credits.add(entry.attribution());
         addMetadata(rows,entry.metadata().stream().filter(MainActivity::primaryArticleMetadata)
-                .collect(java.util.stream.Collectors.toList()),false);
+                .collect(java.util.stream.Collectors.toList()),false,credits);
         addOutlineAction(rows,getString(R.string.save_entry),() -> model.save(entry,null));
         if (!entry.senses().isEmpty()) addSectionHeading(rows,getString(R.string.article_meanings));
         for (var sense : entry.senses()) {
@@ -327,12 +328,10 @@ public final class MainActivity extends AppCompatActivity {
                 text.append(word);
             }
             if (text.length() > 0) addDetail(rows,text);
-            addMetadata(rows,sense.metadata(),false);
+            addMetadata(rows,sense.metadata(),false,credits);
             if (sense.context() != null) {
-                TextView context = inflateArticleDetail(rows);
-                context.setText(getString(R.string.metadata_line,getString(R.string.source_context),
-                        sense.context().text(),sense.context().attribution()));
-                rows.addView(context);
+                addDetail(rows,getString(R.string.metadata_content,getString(R.string.source_context),sense.context().text()));
+                credits.add(sense.context().attribution());
             }
             if (!sense.examples().isEmpty()) {
                 addSectionHeading(rows,getString(R.string.article_sense_examples));
@@ -343,7 +342,7 @@ public final class MainActivity extends AppCompatActivity {
                     addDetail(rows,exampleText);
                 }
             }
-            addDetail(rows,sense.attribution());
+            credits.add(sense.attribution());
             if (sense != primary && hasStudyAnswer(sense)) {
                 addOutlineAction(rows,getString(R.string.study_add_sense,sense.position()),() -> model.learn(entry,sense));
             }
@@ -357,7 +356,7 @@ public final class MainActivity extends AppCompatActivity {
                 if (text.length() > 0) text.append("\n\n");
                 text.append(form.spelling());
                 if (form.grammar()!=null) text.append(" · ").append(localGrammar(form.grammar()));
-                text.append("\n").append(form.attribution());
+                credits.add(form.attribution());
             }
             forms.setText(text);
             rows.addView(forms);
@@ -366,14 +365,28 @@ public final class MainActivity extends AppCompatActivity {
                 .collect(java.util.stream.Collectors.toList());
         if (!notes.isEmpty()) {
             addSectionHeading(rows,getString(R.string.article_source_notes));
-            addMetadata(rows,notes,research);
+            addMetadata(rows,notes,research,credits);
         }
-        addSectionHeading(rows,getString(R.string.article_sources));
-        addDetail(rows,entry.attribution());
+        addOutlineAction(rows,getString(R.string.article_sources),() ->
+                new MaterialAlertDialogBuilder(this).setTitle(R.string.article_sources)
+                        .setMessage(credits.stream().filter(value -> value != null && !value.isEmpty())
+                                .collect(java.util.stream.Collectors.joining("\n\n")))
+                        .setPositiveButton(android.R.string.ok,null).show());
     }
 
     private static boolean hasStudyAnswer(DictionaryRepository.Sense sense) {
         return sense.translations().stream().anyMatch(word -> !word.trim().isEmpty());
+    }
+
+    private String localPartOfSpeech(String pos) {
+        if (pos == null) return "";
+        return switch (pos) {
+            case "n", "noun" -> getString(R.string.pos_noun);
+            case "v", "verb" -> getString(R.string.pos_verb);
+            case "adj", "adjective" -> getString(R.string.pos_adjective);
+            case "adv", "adverb" -> getString(R.string.pos_adverb);
+            default -> pos;
+        };
     }
 
     private void updatePronunciationButton() {
@@ -405,7 +418,7 @@ public final class MainActivity extends AppCompatActivity {
     }
 
     private void addMetadata(LinearLayout rows,java.util.List<DictionaryRepository.Metadata> metadata,
-                             boolean sourceEntryNotes) {
+                             boolean sourceEntryNotes,java.util.Set<String> credits) {
         for (var value : metadata) {
             int label = switch (value.kind()) {
                 case "ipa" -> R.string.metadata_ipa;
@@ -422,7 +435,11 @@ public final class MainActivity extends AppCompatActivity {
             if (label == 0) continue;
             TextView detail = inflateArticleDetail(rows);
             String text = value.form() == null ? value.value() : value.form() + " · " + value.value();
-            detail.setText(getString(R.string.metadata_line,getString(label),text,value.attribution()));
+            credits.add(value.attribution());
+            // Independent examples carry separate credits for the two texts.
+            detail.setText(value.kind().equals("usage_example")
+                    ? getString(R.string.metadata_line,getString(label),text,value.attribution())
+                    : getString(R.string.metadata_content,getString(label),text));
             rows.addView(detail);
         }
     }
@@ -653,14 +670,17 @@ public final class MainActivity extends AppCompatActivity {
         }
         heading.setText(R.string.study_today);
         body.setText(R.string.study_today_body);
+        if (learning.unstudied == 0 && learning.ready == 0) body.setText(R.string.study_up_to_date);
+        if (learning.nextDue != null) addDetail(rows,nextStudyLabel(learning.nextDue));
         addStudyAction(rows,R.string.study_new_count,learning.unstudied,FoundationViewModel.STUDY_NEW);
         addStudyAction(rows,R.string.study_due_count,learning.ready,FoundationViewModel.STUDY_DUE);
-        if (learning.nextDue != null) {
-            String date = java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.MEDIUM,
-                    java.text.DateFormat.SHORT).format(new java.util.Date(learning.nextDue));
-            addDetail(rows,getString(R.string.study_next_date,date));
-        }
-        addAction(rows,getString(R.string.open_collections),() -> open(Screen.COLLECTIONS));
+        addOutlineAction(rows,getString(R.string.study_by_collection),() -> open(Screen.COLLECTIONS));
+    }
+
+    private String nextStudyLabel(long due) {
+        String date = java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.MEDIUM,
+                java.text.DateFormat.SHORT).format(new java.util.Date(due));
+        return getString(R.string.study_next_date,date);
     }
 
     private void addStudyAction(LinearLayout rows,int label,int count,int mode) {
@@ -679,6 +699,7 @@ public final class MainActivity extends AppCompatActivity {
                 body.setText(R.string.study_none_available);
             }
             addAction(rows,getString(R.string.study_home),() -> open(Screen.REVIEW));
+            if (reviewed > 0) addOutlineAction(rows,getString(R.string.open_progress),() -> open(Screen.PROGRESS));
             return;
         }
         addDetail(rows,getString(R.string.study_position,model.studyPosition()+1,model.studyTotal()));
@@ -698,7 +719,7 @@ public final class MainActivity extends AppCompatActivity {
             String wait = next.days() == 0
                     ? getString(R.string.study_minutes,next.due()/60_000)
                     : getString(R.string.study_days,next.days());
-            addAction(rows,getString(R.string.study_rating_with_interval,choices[i],wait),() -> {
+            addOutlineAction(rows,getString(R.string.study_rating_with_interval,choices[i],wait),() -> {
                 model.grade(exercise,rating);
                 renderPersonal();
             }).setEnabled(!model.grading());

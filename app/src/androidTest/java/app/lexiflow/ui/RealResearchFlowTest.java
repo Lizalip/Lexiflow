@@ -96,7 +96,12 @@ public class RealResearchFlowTest {
         try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
             awaitAvailable(scenario);
             onView(withId(R.id.research_banner)).check(matches(isDisplayed()));
-            onView(withId(R.id.research_banner)).check(matches(withText(containsString(view(scenario).corpusVersion()))));
+            String version = view(scenario).corpusVersion();
+            onView(withId(R.id.settings)).perform(click());
+            awaitAvailable(scenario);
+            onView(withText(containsString(version))).perform(scrollTo()).check(matches(isDisplayed()));
+            back();
+            awaitAvailable(scenario);
             Log.i(TAG,"initial dictionary UI ms="+(SystemClock.elapsedRealtime()-launch));
             capture(scenario,"01-dictionary");
             onView(withId(R.id.direction)).perform(click());
@@ -121,8 +126,8 @@ public class RealResearchFlowTest {
             assertNotNull(article);
             assertTrue(article.senses().size()>1);
             var ipa = article.metadata().stream().filter(row -> row.kind().equals("ipa")).findFirst().orElseThrow();
-            onView(withText(target.getString(R.string.metadata_line,target.getString(R.string.metadata_ipa),
-                    ipa.value(),ipa.attribution()))).check(matches(isDisplayed()));
+            onView(withText(target.getString(R.string.metadata_content,target.getString(R.string.metadata_ipa),
+                    ipa.value()))).perform(scrollTo()).check(matches(isDisplayed()));
             assertTrue(article.metadata().stream().anyMatch(row -> row.kind().equals("definition")));
             capture(scenario,"03-entry");
             onView(withText(target.getString(R.string.save_sense,hit.position()))).perform(scrollTo(),click());
@@ -331,7 +336,9 @@ public class RealResearchFlowTest {
             onView(withText("book · n · "+target.getString(R.string.sense_title,hit.position())
                     +"\n"+TranslationDisplay.wording(hit.translation()))).perform(scrollTo(),click());
             awaitDictionary(scenario,state -> state.entry()!=null,"CEFR article displayed");
-            onView(withText(containsString("CEFR-J Wordlist Version 1.6"))).perform(scrollTo()).check(matches(isDisplayed()));
+            action(R.string.article_sources);
+            onView(withText(containsString("CEFR-J Wordlist Version 1.6"))).check(matches(isDisplayed()));
+            onView(withText(android.R.string.ok)).perform(click());
         }
     }
 

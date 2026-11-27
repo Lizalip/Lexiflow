@@ -9,7 +9,7 @@
 
     <TextView android:id="@+id/research_banner" android:visibility="gone"
         android:layout_width="match_parent" android:layout_height="wrap_content"
-        android:layout_marginTop="@dimen/space_small" android:text="@string/research_corpus_notice" />
+        android:layout_marginTop="@dimen/space_small" android:text="@string/research_short_notice" />
 
     <TextView android:id="@+id/pair" android:text="@string/pair" android:textAppearance="?attr/textAppearanceTitleMedium"
         android:layout_marginTop="@dimen/space_small" android:layout_width="match_parent" android:layout_height="wrap_content" />

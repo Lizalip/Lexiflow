@@ -8,6 +8,8 @@
     <string name="study_loading_body">Загружаем сессию обучения.</string>
     <string name="study_today">План на сегодня</string>
     <string name="study_today_body">Начните с новых слов или повторите то, что уже изучали.</string>
+    <string name="study_up_to_date">На сейчас всё повторено. Можно найти новое слово или открыть подборку.</string>
+    <string name="study_by_collection">Учить по подборке</string>
     <string name="study_new_count">Учить новые слова · %1$d</string>
     <string name="study_due_count">Повторить изученное · %1$d</string>
     <string name="study_next_date">Следующее повторение · %1$s</string>
@@ -140,6 +142,13 @@
     <string name="grammar_superlative">превосходная степень</string>
     <string name="word_forms">Формы слова</string>
     <string name="metadata_line">%1$s · %2$s\n%3$s</string>
+    <string name="metadata_content">%1$s · %2$s</string>
+    <string name="research_short_notice">Исследовательская версия · FreeDict</string>
+    <string name="research_details">О словарном пакете</string>
+    <string name="pos_noun">существительное</string>
+    <string name="pos_verb">глагол</string>
+    <string name="pos_adjective">прилагательное</string>
+    <string name="pos_adverb">наречие</string>
     <string name="personal_page_range">%1$d–%2$d из %3$d</string>
     <string name="personal_previous_page">Предыдущая страница</string>
     <string name="personal_next_page">Следующая страница</string>

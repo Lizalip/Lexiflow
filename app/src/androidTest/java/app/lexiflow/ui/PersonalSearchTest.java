@@ -14,6 +14,37 @@ import static org.junit.Assert.assertTrue;
 
 @RunWith(AndroidJUnit4.class)
 public class PersonalSearchTest {
+    @Test public void quizSchedulesOneEventAcrossLegacyDirectionsAndCanBeRetried() {
+        var context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        var personal = Room.inMemoryDatabaseBuilder(context,PersonalDatabase.class).build();
+        try {
+            var library = personal.library();
+            long saved = save(library,"test-word","тест","");
+            long now = 1_000;
+            for (boolean reverse : new boolean[]{false,true}) {
+                var card = new PersonalDatabase.Card();
+                card.savedId = saved;
+                card.reverse = reverse;
+                card.due = now;
+                library.addCard(card);
+            }
+            assertEquals(1,library.learningCounts(now).unstudied);
+            var queue = library.quizQueue(now,FoundationViewModel.STUDY_NEW,0,10);
+            assertEquals(1,queue.size());
+            var exercise = queue.get(0);
+            var grade = new PersonalDatabase.Library.QuizGrade(exercise.id,exercise.savedId,exercise.due,exercise.intervalDays,2);
+            library.gradeQuiz(List.of(grade),now);
+            library.gradeQuiz(List.of(grade),now);
+            assertEquals(1,library.reviewCount());
+            assertEquals(2,library.cardCount());
+            assertEquals(0,library.dueCount(now));
+            long again = now+2*86_400_000L;
+            assertEquals(1,library.quizQueue(again,FoundationViewModel.STUDY_DUE,0,10).size());
+        } finally {
+            personal.close();
+        }
+    }
+
     @Test public void learningReusesSavedSenseAndSeparatesNewCardsFromScheduledReviews() {
         var context = InstrumentationRegistry.getInstrumentation().getTargetContext();
         var personal = Room.inMemoryDatabaseBuilder(context,PersonalDatabase.class).build();

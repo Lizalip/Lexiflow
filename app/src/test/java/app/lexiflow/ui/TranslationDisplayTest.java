@@ -8,7 +8,7 @@ public class TranslationDisplayTest {
     @Test public void showsLiteralWordsAndLinkLabelsWhilePreservingAnnotations() {
         assertEquals("сло́во (редк.)",TranslationDisplay.wording("[[сло́во]] (редк.)"));
         assertEquals("связанный текст",TranslationDisplay.wording("[[термин|связанный текст]]"));
-        assertEquals(List.of("слово","сло́во"),TranslationDisplay.alternatives(
+        assertEquals(List.of("слово"),TranslationDisplay.alternatives(
                 List.of("слово","[[слово]]","сло́во")));
     }
 

@@ -1,5 +1,9 @@
 <menu xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto">
+    <item android:id="@+id/vocabulary_collections" android:icon="@drawable/ic_vocabulary"
+        android:title="@string/open_collections" android:visible="false" app:showAsAction="always" />
+    <item android:id="@+id/vocabulary_display" android:icon="@drawable/ic_filter"
+        android:title="@string/saved_filters" android:visible="false" app:showAsAction="always" />
     <item android:id="@+id/settings" android:icon="@drawable/ic_settings"
         android:title="@string/settings" app:showAsAction="always" />
 </menu>

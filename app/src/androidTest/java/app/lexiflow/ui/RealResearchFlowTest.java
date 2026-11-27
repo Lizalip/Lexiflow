@@ -52,15 +52,10 @@ public class RealResearchFlowTest {
             awaitAvailable(scenario,120);
             Log.i(TAG,"demonstration dictionary available ms="+(SystemClock.elapsedRealtime()-launch));
             capture(scenario,"01-dictionary");
-            onView(withId(R.id.vocabulary)).perform(click());
+            selectTab(scenario,R.id.vocabulary,Screen.VOCABULARY);
             await(scenario,state -> state.screen()==Screen.VOCABULARY && state.savedCount()==0,"vocabulary is empty");
             onView(withText(R.string.no_words)).check(matches(isDisplayed()));
-            scenario.onActivity(activity -> {
-                android.widget.LinearLayout rows = activity.findViewById(R.id.results);
-                assertEquals(activity.findViewById(R.id.action).getWidth(),rows.getChildAt(0).getWidth());
-                assertEquals(activity.findViewById(R.id.action).getHeight(),rows.getChildAt(0).getHeight());
-            });
-            onView(withId(R.id.action)).perform(scrollTo(),click());
+            onView(withId(R.id.vocabulary_collections)).perform(click());
             await(scenario,state -> state.screen()==Screen.COLLECTIONS,"empty vocabulary opens collections");
             back();
             action(R.string.study_find_word);
@@ -93,29 +88,46 @@ public class RealResearchFlowTest {
             onView(withText(R.string.word_in_vocabulary)).check(matches(org.hamcrest.Matchers.not(isEnabled())));
             back();
             awaitAvailable(scenario);
-            onView(withId(R.id.review)).perform(click());
-            await(scenario,state -> state.screen()==Screen.REVIEW && state.learning().unstudied==1,"single new card");
+            selectTab(scenario,R.id.review,Screen.REVIEW);
+            await(scenario,state -> state.screen()==Screen.REVIEW && state.learning()!=null,"learning snapshot");
+            capture(scenario,"11-learning");
+            scenario.onActivity(activity -> {
+                var state = new ViewModelProvider(activity).get(FoundationViewModel.class).personalView.getValue();
+                assertEquals("saved values before learning",1,state.savedCount());
+                assertEquals("counted study values",1,state.learning().cards);
+                assertEquals("due new values",1,state.learning().unstudied);
+            });
             onView(withText(target.getString(R.string.study_new_count,1))).perform(scrollTo(),click());
-            await(scenario,state -> state.screen()==Screen.STUDY && state.exercise()!=null
-                    && state.exercise().entryId.equals(hit.entryId()),"real article opened its card");
+            var quiz = awaitQuiz(scenario,value -> value.question()!=null);
+            var first = quiz.question();
+            assertEquals("book",first.word().spelling());
             capture(scenario,"06-review-front");
-            action(R.string.reveal);
-            String answer = TranslationDisplay.answer(String.join(" · ",sense.translations()),true,true);
-            onView(withId(R.id.body)).check(matches(withText(answer)));
+            String wrong = first.options().stream().filter(value -> !value.equals(first.correct())).findFirst().orElseThrow();
+            chooseQuizOption(wrong);
+            onView(withText(R.string.quiz_incorrect)).perform(scrollTo()).check(matches(isDisplayed()));
             scenario.recreate();
             scenario.onActivity(activity -> activity.getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON));
-            await(scenario,state -> state.screen()==Screen.STUDY && state.exercise()!=null,"real card restored");
-            onView(withId(R.id.body)).check(matches(withText(answer)));
+            assertEquals(first,awaitQuiz(scenario,value -> value.selected()>=0).question());
             capture(scenario,"07-review-answer");
-            String rating = target.getResources().getStringArray(R.array.review_ratings)[2];
-            onView(withText(startsWith(rating+" · "))).perform(scrollTo(),click());
-            await(scenario,state -> state.screen()==Screen.STUDY && state.exercise()==null,"real session finished");
-            onView(withId(R.id.panel_title)).check(matches(withText(R.string.review_session_finished)));
+            action(R.string.quiz_continue);
+            var opposite = awaitQuiz(scenario,value -> value.position()==1).question();
+            assertNotEquals(first.reverse(),opposite.reverse());
+            chooseQuizOption(opposite.correct());
+            action(R.string.quiz_continue);
+            var repeated = awaitQuiz(scenario,value -> value.position()==2).question();
+            assertTrue(repeated.retry());
+            chooseQuizOption(repeated.correct());
+            action(R.string.quiz_continue);
+            var finished = awaitQuiz(scenario,QuizSession::saved);
+            assertEquals(3,finished.answered());
+            assertEquals(2,finished.correct());
+            assertEquals(1,finished.grades().get(0).rating());
+            onView(withText(R.string.review_session_finished)).check(matches(isDisplayed()));
             capture(scenario,"10-session-summary");
             action(R.string.study_home);
             await(scenario,state -> state.screen()==Screen.REVIEW && state.learning().nextDue!=null,"next review scheduled");
             capture(scenario,"11-learning");
-            onView(withId(R.id.search)).perform(click());
+            selectTab(scenario,R.id.search,Screen.SEARCH);
             awaitAvailable(scenario);
             result(hit).perform(scrollTo(),click());
             awaitDictionary(scenario,FoundationViewModel.DictionaryView::added,"reopened learned value stays added");
@@ -123,23 +135,23 @@ public class RealResearchFlowTest {
                     .check(matches(org.hamcrest.Matchers.not(isEnabled())));
             back();
             awaitAvailable(scenario);
-            onView(withId(R.id.progress)).perform(click());
+            selectTab(scenario,R.id.progress,Screen.PROGRESS);
             await(scenario,state -> state.screen()==Screen.PROGRESS && state.reviewed()==1
                     && state.successful()==1 && state.savedCount()==1
                     && state.activity().get(6).reviews()==1,"real progress updated");
             capture(scenario,"08-progress");
-            onView(withId(R.id.vocabulary)).perform(click());
+            selectTab(scenario,R.id.vocabulary,Screen.VOCABULARY);
             await(scenario,state -> state.screen()==Screen.VOCABULARY && state.savedCount()==1,"saved meaning in vocabulary");
             onView(withId(R.id.saved_query)).perform(replaceText("book"));
             await(scenario,state -> state.savedQuery().equals("book") && state.rowCount()==1,"search finds saved word");
-            onView(withText(startsWith("book · "))).perform(scrollTo(),click());
+            onView(org.hamcrest.Matchers.allOf(withId(R.id.result_word),withText("book"))).perform(scrollTo(),click());
             onView(withText(target.getResources().getStringArray(R.array.saved_actions)[1])).perform(click());
             onView(withHint(R.string.custom_translation)).perform(replaceText(CUSTOM));
             onView(withHint(R.string.note)).perform(replaceText(NOTE),closeSoftKeyboard());
             onView(withText(R.string.save)).perform(click());
             await(scenario,state -> state.saved().stream().anyMatch(row -> NOTE.equals(row.note)),"demo note persisted");
             capture(scenario,"04-vocabulary");
-            onView(withId(R.id.action)).perform(scrollTo(),click());
+            onView(withId(R.id.vocabulary_collections)).perform(click());
             await(scenario,state -> state.screen()==Screen.COLLECTIONS,"collections opened");
             action(R.string.create_collection);
             onView(withHint(R.string.collection_name)).perform(replaceText(COLLECTION),closeSoftKeyboard());
@@ -168,14 +180,13 @@ public class RealResearchFlowTest {
 
                 result(kitchen).perform(scrollTo(),click());
                 awaitAvailable(scenario);
-                action(R.string.article_more);
-                onView(withText(containsString("The kitchen is downstairs."))).check(matches(isDisplayed()));
+                action(R.string.article_more_examples);
+                onView(withText("The kitchen is downstairs.")).perform(scrollTo()).check(matches(isDisplayed()));
                 capture(scenario,"12-attributed-example");
-                onView(withText(android.R.string.ok)).perform(click());
                 back();
                 openDemoEntry(scenario,"one","numeral");
                 onView(withText(R.string.article_definition)).check(matches(isDisplayed()));
-                onView(withId(R.id.article_variants)).check(matches(withText(containsString("оди́н"))));
+                onView(withId(R.id.article_variants)).check(matches(withText(containsString("один"))));
                 scenario.onActivity(activity -> {
                     android.widget.TextView text = activity.findViewById(R.id.article_transcriptions);
                     assertEquals(2,text.getMaxLines());
@@ -242,14 +253,14 @@ public class RealResearchFlowTest {
             onView(withId(R.id.vocabulary)).perform(click());
             await(scenario,state -> state.savedCount()==1,"saved real sense");
             String[] actions = target.getResources().getStringArray(R.array.saved_actions);
-            onView(withText(startsWith("book · "))).perform(scrollTo(),click());
+            savedResult("book").perform(scrollTo(),click());
             onView(withText(actions[1])).perform(click());
             onView(withHint(R.string.custom_translation)).perform(replaceText(CUSTOM));
             onView(withHint(R.string.note)).perform(replaceText(NOTE),closeSoftKeyboard());
             onView(withText(R.string.save)).perform(click());
             await(scenario,state -> state.saved().stream().anyMatch(row -> NOTE.equals(row.note)),"real sense edited");
             capture(scenario,"04-vocabulary");
-            onView(withId(R.id.action)).perform(scrollTo(),click());
+            onView(withId(R.id.vocabulary_collections)).perform(click());
             await(scenario,state -> state.screen()==Screen.COLLECTIONS,"collections opened");
             action(R.string.create_collection);
             onView(withHint(R.string.collection_name)).perform(replaceText(COLLECTION),closeSoftKeyboard());
@@ -261,7 +272,7 @@ public class RealResearchFlowTest {
             onView(withText(COLLECTION)).perform(click());
             savedAction(actions[3]);
             savedAction(actions[4]);
-            onView(withId(R.id.action)).perform(scrollTo(),click());
+            onView(withId(R.id.vocabulary_collections)).perform(click());
             await(scenario,state -> state.screen()==Screen.COLLECTIONS,"collection page ready");
             onView(withText(COLLECTION)).perform(scrollTo(),click());
             await(scenario,state -> state.collection()!=0 && state.saved().size()==1,"real sense in collection");
@@ -269,23 +280,17 @@ public class RealResearchFlowTest {
             back();
             back();
             onView(withId(R.id.review)).perform(click());
-            await(scenario,state -> state.screen() == Screen.REVIEW && state.learning().unstudied == 2,"new cards counted");
-            onView(withText(target.getString(R.string.study_new_count,2))).perform(scrollTo(),click());
-            await(scenario,state -> state.exercise()!=null && !state.exercise().reverse,"forward card");
+            await(scenario,state -> state.screen() == Screen.REVIEW && state.learning().unstudied == 1,"one value counted");
+            onView(withText(target.getString(R.string.study_new_count,1))).perform(scrollTo(),click());
+            assertEquals(CUSTOM,awaitQuiz(scenario,quiz -> quiz.question()!=null).question().correct());
             capture(scenario,"06-review-front");
-            action(R.string.reveal);
-            onView(withId(R.id.body)).check(matches(withText(CUSTOM)));
+            onView(withText(CUSTOM)).perform(scrollTo(),click());
             capture(scenario,"07-review-answer");
-            String[] grades = target.getResources().getStringArray(R.array.review_ratings);
-            onView(withText(startsWith(grades[1]+" · "))).perform(scrollTo(),click());
-            await(scenario,state -> state.exercise()!=null && state.exercise().reverse,"reverse card");
-            action(R.string.reveal);
-            onView(withId(R.id.body)).check(matches(withText("book")));
-            onView(withText(startsWith(grades[2]+" · "))).perform(scrollTo(),click());
-            await(scenario,state -> state.screen()==Screen.STUDY && state.exercise()==null,"cards graded");
+            action(R.string.quiz_continue);
+            awaitQuiz(scenario,QuizSession::saved);
             action(R.string.study_home);
             onView(withId(R.id.progress)).perform(click());
-            await(scenario,state -> state.screen()==Screen.PROGRESS && state.reviewed()==2,"statistics updated");
+            await(scenario,state -> state.screen()==Screen.PROGRESS && state.reviewed()==1,"statistics updated");
             capture(scenario,"08-progress");
             onView(withId(R.id.settings)).perform(click());
             awaitAvailable(scenario);
@@ -303,11 +308,9 @@ public class RealResearchFlowTest {
             onView(withId(R.id.vocabulary)).perform(click());
             await(scenario,state -> state.saved().stream().anyMatch(row ->
                     row.spelling.equals("book") && row.note.equals(NOTE) && row.custom.equals(CUSTOM)),"personal data persisted");
-            onView(withId(R.id.review)).perform(click());
-            await(scenario,state -> state.screen()==Screen.REVIEW,"review loaded");
-            onView(withId(R.id.action)).perform(scrollTo(),click());
-            await(scenario,state -> state.screen()==Screen.PROGRESS && state.reviewed()==2
-                    && state.successful()==2 && state.cards()==2,"review history persisted");
+            onView(withId(R.id.progress)).perform(click());
+            await(scenario,state -> state.screen()==Screen.PROGRESS && state.reviewed()==1
+                    && state.successful()==1 && state.cards()==2,"review history persisted");
         }
     }
 
@@ -362,36 +365,30 @@ public class RealResearchFlowTest {
             await(scenario,state -> state.savedCount()==2 && state.saved().stream().anyMatch(row ->
                     "book".equals(row.spelling) && CUSTOM.equals(row.custom)),"previous English save survived update");
             String[] actions = target.getResources().getStringArray(R.array.saved_actions);
-            onView(withText(startsWith(word+" · "))).perform(scrollTo(),click());
+            savedResult(word).perform(scrollTo(),click());
             onView(withText(actions[1])).perform(click());
             onView(withHint(R.string.custom_translation)).perform(replaceText("Local trial gloss"));
             onView(withHint(R.string.note)).perform(replaceText("Local trial note"),closeSoftKeyboard());
             onView(withText(R.string.save)).perform(click());
             await(scenario,state -> state.saved().stream().anyMatch(row -> word.equals(row.spelling)
                     && "Local trial note".equals(row.note)),"Russian note saved");
-            onView(withText(startsWith(word+" · "))).perform(scrollTo(),click());
+            savedResult(word).perform(scrollTo(),click());
             onView(withText(actions[2])).perform(click());
             onView(withText(COLLECTION)).perform(click());
             for (int index : new int[]{4,3}) {
-                onView(withText(startsWith(word+" · "))).perform(scrollTo(),click());
+                savedResult(word).perform(scrollTo(),click());
                 onView(withText(actions[index])).perform(click());
             }
             onView(withId(R.id.review)).perform(click());
-            await(scenario,state -> state.screen() == Screen.REVIEW && state.learning().unstudied == 2,"new cards counted");
-            onView(withText(target.getString(R.string.study_new_count,2))).perform(scrollTo(),click());
-            await(scenario,state -> state.exercise()!=null && !state.exercise().reverse,"direct card unlocked");
-            action(R.string.reveal);
-            onView(withId(R.id.body)).check(matches(withText("Local trial gloss")));
-            String[] grades = target.getResources().getStringArray(R.array.review_ratings);
-            onView(withText(startsWith(grades[1]+" · "))).perform(scrollTo(),click());
-            await(scenario,state -> state.exercise()!=null && state.exercise().reverse,"inverse card unlocked");
-            action(R.string.reveal);
-            onView(withId(R.id.body)).check(matches(withText(word)));
-            onView(withText(startsWith(grades[2]+" · "))).perform(scrollTo(),click());
-            await(scenario,state -> state.screen()==Screen.STUDY && state.exercise()==null,"both directions graded");
+            await(scenario,state -> state.screen() == Screen.REVIEW && state.learning().unstudied == 1,"new value counted");
+            onView(withText(target.getString(R.string.study_new_count,1))).perform(scrollTo(),click());
+            assertEquals("Local trial gloss",awaitQuiz(scenario,quiz -> quiz.question()!=null).question().correct());
+            onView(withText("Local trial gloss")).perform(scrollTo(),click());
+            action(R.string.quiz_continue);
+            awaitQuiz(scenario,QuizSession::saved);
             action(R.string.study_home);
             onView(withId(R.id.progress)).perform(click());
-            await(scenario,state -> state.screen()==Screen.PROGRESS && state.reviewed()==4 && state.cards()==4,
+            await(scenario,state -> state.screen()==Screen.PROGRESS && state.reviewed()==2 && state.cards()==4,
                     "both languages retain review history");
         }
     }
@@ -468,8 +465,7 @@ public class RealResearchFlowTest {
             assertEquals(2,usage.value().split("\n").length);
             assertEquals(2,usage.attribution().split("tatoeba.org/en/sentences/show/",-1).length-1);
             assertTrue(article.senses().stream().allMatch(row -> row.examples().isEmpty()));
-            action(R.string.article_more);
-            onView(withText(containsString(usage.value()))).check(matches(isDisplayed()));
+            onView(withText(usage.value().split("\n",2)[0])).perform(scrollTo()).check(matches(isDisplayed()));
         }
     }
 
@@ -500,10 +496,8 @@ public class RealResearchFlowTest {
             assertTrue(usage.stream().allMatch(example ->
                     example.attribution().split("tatoeba.org/en/sentences/show/",-1).length==3));
             assertTrue(article.senses().stream().allMatch(row -> row.examples().isEmpty()));
-            action(R.string.article_more);
-            onView(withText(containsString(usage.get(0).value()))).check(matches(isDisplayed()));
+            onView(withText(usage.get(0).value().split("\n",2)[0])).perform(scrollTo()).check(matches(isDisplayed()));
             capture(scenario,"13-attributed-usage");
-            onView(withText(android.R.string.ok)).perform(click());
             back();
             query("went");
             awaitDictionary(scenario,state -> state.hits().stream().anyMatch(row ->
@@ -561,8 +555,7 @@ public class RealResearchFlowTest {
             var example = view(scenario).entry().metadata().stream()
                     .filter(row -> "usage_example".equals(row.kind())).findFirst().orElseThrow();
             assertEquals(3,example.attribution().split("tatoeba.org/en/sentences/show/",-1).length);
-            action(R.string.article_more);
-            onView(withText(containsString(example.value()))).check(matches(isDisplayed()));
+            onView(withText(example.value().split("\n",2)[0])).perform(scrollTo()).check(matches(isDisplayed()));
         }
         var repository = new LocalDictionaryRepository(target);
         try {
@@ -598,12 +591,11 @@ public class RealResearchFlowTest {
                     .filter(row -> "usage_example".equals(row.kind()))
                     .collect(java.util.stream.Collectors.toList());
             assertTrue(examples.size()>=2);
-            action(R.string.article_more);
+            if (examples.size()>2) action(R.string.article_more_examples);
             for (var example : examples) {
                 assertEquals(3,example.attribution().split("tatoeba.org/en/sentences/show/",-1).length);
-                onView(withText(containsString(example.value()))).check(matches(isDisplayed()));
+                onView(withText(example.value().split("\n",2)[0])).perform(scrollTo()).check(matches(isDisplayed()));
             }
-            onView(withText(android.R.string.ok)).perform(click());
             if (version.endsWith("-ru-supplement")) {
                 back();
                 onView(withId(R.id.direction)).perform(click());
@@ -637,7 +629,7 @@ public class RealResearchFlowTest {
             await(scenario,state -> state.savedCount()==(added==null ? 2 : 3) && state.saved().stream().anyMatch(row ->
                     word.equals(row.spelling) && "Local trial note".equals(row.note)
                     && "Local trial gloss".equals(row.custom)),"both saved languages persisted");
-            onView(withText(startsWith(word+" · "))).perform(scrollTo(),click());
+            savedResult(word).perform(scrollTo(),click());
             onView(withText(R.string.open_saved)).perform(click());
             awaitDictionary(scenario,state -> state.status()==DictionaryRepository.Status.AVAILABLE,
                     "saved link opened");
@@ -645,21 +637,20 @@ public class RealResearchFlowTest {
             else assertEquals(word,view(scenario).entry().spelling());
             back();
             if (added!=null) {
-                onView(withText(startsWith(added+" · "))).perform(scrollTo(),click());
+                savedResult(added).perform(scrollTo(),click());
                 onView(withText(R.string.open_saved)).perform(click());
                 if (rollback) onView(withText(R.string.entry_unavailable)).check(matches(isDisplayed()));
                 else awaitDictionary(scenario,state -> state.entry()!=null && added.equals(state.entry().spelling()),
                         "expanded Russian article reopened");
                 back();
             }
-            onView(withId(R.id.action)).perform(scrollTo(),click());
+            onView(withId(R.id.vocabulary_collections)).perform(click());
             onView(withText(COLLECTION)).perform(scrollTo(),click());
             await(scenario,state -> state.collection()!=0 && state.saved().size()==2,"collection persisted");
             back();
             back();
-            onView(withId(R.id.review)).perform(click());
-            onView(withId(R.id.action)).perform(scrollTo(),click());
-            await(scenario,state -> state.screen()==Screen.PROGRESS && state.cards()==4 && state.reviewed()==4,
+            onView(withId(R.id.progress)).perform(click());
+            await(scenario,state -> state.screen()==Screen.PROGRESS && state.cards()==4 && state.reviewed()==2,
                     "bilingual review history persisted");
         }
     }
@@ -831,13 +822,13 @@ public class RealResearchFlowTest {
             onView(withId(R.id.vocabulary)).perform(click());
             await(scenario,state -> state.saved().stream().anyMatch(row -> "hypothesis".equals(row.spelling)),
                     "saved word remains available despite missing article");
-            onView(withText(startsWith("hypothesis · "+CUSTOM))).perform(scrollTo(),click());
+            savedResult("hypothesis").perform(scrollTo(),click());
             onView(withText(R.string.open_saved)).perform(click());
             awaitDictionary(scenario,state -> state.status()==DictionaryRepository.Status.AVAILABLE
                     && state.entry()==null,"smaller dictionary reports an unavailable article");
             onView(withText(R.string.entry_unavailable)).check(matches(isDisplayed()));
             back();
-            onView(withText(startsWith("hypothesis · "+CUSTOM))).check(matches(isDisplayed()));
+            savedResult("hypothesis").check(matches(isDisplayed()));
         }
     }
 
@@ -995,6 +986,36 @@ public class RealResearchFlowTest {
     private static androidx.test.espresso.ViewInteraction result(DictionaryRepository.Hit hit) {
         return onView(withTagValue(org.hamcrest.Matchers.is((Object)hit.senseId())));
     }
+    static QuizSession awaitQuiz(ActivityScenario<MainActivity> scenario,
+                                         Predicate<QuizSession> condition) {
+        var result = new java.util.concurrent.atomic.AtomicReference<QuizSession>();
+        long until = SystemClock.elapsedRealtime()+15_000;
+        do {
+            scenario.onActivity(activity -> result.set(new ViewModelProvider(activity)
+                    .get(FoundationViewModel.class).quiz()));
+            if (result.get()!=null && condition.test(result.get())) return result.get();
+            SystemClock.sleep(100);
+        } while (SystemClock.elapsedRealtime()<until);
+        throw new AssertionError("quiz state did not become available");
+    }
+    private static void chooseQuizOption(String answer) {
+        onView(org.hamcrest.Matchers.allOf(isAssignableFrom(com.google.android.material.button.MaterialButton.class),
+                withText(answer))).perform(scrollTo(),click());
+    }
+    private static void selectTab(ActivityScenario<MainActivity> scenario,int tab,Screen expected) {
+        var current = new java.util.concurrent.atomic.AtomicReference<Screen>();
+        onView(withId(tab)).perform(click());
+        for (int attempt=0;attempt<10;attempt++) {
+            scenario.onActivity(activity -> current.set(new ViewModelProvider(activity)
+                    .get(FoundationViewModel.class).screen()));
+            if (current.get()==expected) return;
+            SystemClock.sleep(100);
+        }
+        // A physical tap can land during the system inset transition when returning from an article.
+        onView(withId(tab)).perform(click());
+        scenario.onActivity(activity -> assertEquals(expected,new ViewModelProvider(activity)
+                .get(FoundationViewModel.class).screen()));
+    }
     private static void openDemoEntry(ActivityScenario<MainActivity> scenario,String spelling,String pos)
             throws InterruptedException {
         query(spelling);
@@ -1005,8 +1026,11 @@ public class RealResearchFlowTest {
         awaitAvailable(scenario);
     }
     private static void action(int label) { onView(withText(label)).perform(scrollTo(),click()); }
+    private static androidx.test.espresso.ViewInteraction savedResult(String word) {
+        return onView(org.hamcrest.Matchers.allOf(withId(R.id.result_word),withText(TranslationDisplay.russian(word))));
+    }
     private static void savedAction(String action) {
-        onView(withText(startsWith("book · "+CUSTOM))).perform(scrollTo(),click());
+        savedResult("book").perform(scrollTo(),click());
         onView(withText(action)).perform(click());
     }
 }

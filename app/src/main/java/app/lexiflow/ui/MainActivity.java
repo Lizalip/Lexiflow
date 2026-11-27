@@ -21,7 +21,6 @@ import app.lexiflow.R;
 import app.lexiflow.data.DictionaryRepository;
 import app.lexiflow.data.LocalDictionaryRepository;
 import app.lexiflow.data.PersonalDatabase;
-import app.lexiflow.data.ReviewScheduler;
 import com.google.android.material.appbar.MaterialToolbar;
 import com.google.android.material.bottomnavigation.BottomNavigationView;
 import com.google.android.material.button.MaterialButton;
@@ -90,7 +89,9 @@ public final class MainActivity extends AppCompatActivity {
             return true;
         });
         toolbar.setOnMenuItemClickListener(item -> {
-            open(Screen.SETTINGS);
+            if (item.getItemId() == R.id.vocabulary_collections) open(Screen.COLLECTIONS);
+            else if (item.getItemId() == R.id.vocabulary_display) vocabularyDisplay();
+            else open(Screen.SETTINGS);
             return true;
         });
         toolbar.setNavigationOnClickListener(v -> back.handleOnBackPressed());
@@ -103,6 +104,7 @@ public final class MainActivity extends AppCompatActivity {
             if (view != null && view.status() == DictionaryRepository.Status.LOADING) renderDictionary();
         });
         model.personalView.observe(this, view -> renderPersonal());
+        model.quizUpdated.observe(this, value -> renderPersonal());
         model.studyNavigation.observe(this, changed -> {
             if (Boolean.TRUE.equals(changed)) {
                 model.studyNavigation.setValue(false);
@@ -151,6 +153,8 @@ public final class MainActivity extends AppCompatActivity {
             toolbar.setNavigationIcon(null);
         }
         toolbar.getMenu().findItem(R.id.settings).setVisible(screen != Screen.SETTINGS);
+        toolbar.getMenu().findItem(R.id.vocabulary_collections).setVisible(screen == Screen.VOCABULARY);
+        toolbar.getMenu().findItem(R.id.vocabulary_display).setVisible(screen == Screen.VOCABULARY);
         navigation.setVisibility(nested ? View.GONE : View.VISIBLE);
         if (!nested) {
             int id = screen == Screen.SEARCH ? R.id.search : screen == Screen.REVIEW ? R.id.review
@@ -158,12 +162,11 @@ public final class MainActivity extends AppCompatActivity {
             navigation.getMenu().findItem(id).setChecked(true);
         }
         ((TextView) findViewById(R.id.title)).setText(screen.title);
-        findViewById(R.id.title).setVisibility(screen == Screen.ENTRY ? View.GONE : View.VISIBLE);
+        findViewById(R.id.title).setVisibility(screen == Screen.ENTRY || screen == Screen.STUDY ? View.GONE : View.VISIBLE);
         findViewById(R.id.screen_panel).setVisibility(View.VISIBLE);
-        findViewById(R.id.research_banner).setVisibility(screen == Screen.SEARCH
-                && LocalDictionaryRepository.isResearchProfile(this) ? View.VISIBLE : View.GONE);
+        findViewById(R.id.research_banner).setVisibility(View.GONE);
         setTitle(screen == Screen.ENTRY ? R.string.app_name : screen.title);
-        findViewById(R.id.pair).setVisibility(screen == Screen.SEARCH || screen == Screen.SETTINGS ? View.VISIBLE : View.GONE);
+        findViewById(R.id.pair).setVisibility(screen == Screen.SETTINGS ? View.VISIBLE : View.GONE);
         findViewById(R.id.query_box).setVisibility(screen == Screen.SEARCH ? View.VISIBLE : View.GONE);
         findViewById(R.id.saved_query_box).setVisibility(screen == Screen.VOCABULARY ? View.VISIBLE : View.GONE);
         ((TextView) findViewById(R.id.panel_title)).setText(screen.heading);
@@ -171,7 +174,8 @@ public final class MainActivity extends AppCompatActivity {
         MaterialButton action = findViewById(R.id.action);
         action.getLayoutParams().width = screen == Screen.VOCABULARY
                 ? android.view.ViewGroup.LayoutParams.MATCH_PARENT : android.view.ViewGroup.LayoutParams.WRAP_CONTENT;
-        action.setVisibility(screen.action == 0 ? View.GONE : View.VISIBLE);
+        action.setVisibility(screen.action == 0 || screen == Screen.VOCABULARY || screen == Screen.REVIEW
+                ? View.GONE : View.VISIBLE);
         if (screen.action != 0) action.setText(screen.action);
         ((ScrollView) findViewById(R.id.scroll)).scrollTo(0, 0);
         renderDictionary();
@@ -239,38 +243,22 @@ public final class MainActivity extends AppCompatActivity {
                     return;
                 }
                 boolean empty = model.query().trim().isEmpty();
-                heading.setText(empty ? R.string.dictionary_prompt
-                        : state.hits().isEmpty() ? R.string.dictionary_no_hits : R.string.dictionary_hits);
-                int dictionaryLabel = state.synthetic() ? R.string.dictionary_synthetic : R.string.pair;
+                findViewById(R.id.screen_panel).setVisibility(!empty && state.hits().isEmpty() ? View.VISIBLE : View.GONE);
                 if (!empty && state.hits().isEmpty()) {
-                    body.setText(getString(R.string.dictionary_no_hits_help,getString(dictionaryLabel)));
+                    heading.setText(R.string.dictionary_no_hits);
+                    body.setText(R.string.search_no_match_help);
                     addOutlineAction(rows,getString(R.string.try_other_direction),model::toggleDirection);
                     addOutlineAction(rows,getString(R.string.clear_search),() -> query.setText(""));
-                } else body.setText(dictionaryLabel);
-                if (empty && !state.synthetic() && LocalDictionaryRepository.isResearchProfile(this)) {
-                    var suggestions = addBlock(rows,getString(R.string.search_try_section));
-                    for (String word : model.reverse() ? new String[]{"книга","дом","мир"}
-                            : new String[]{"book","go","kitchen"}) {
-                        addOutlineAction(suggestions,word,() -> query.setText(word));
-                    }
                 }
                 for (var hit : state.hits()) {
-                    View result = getLayoutInflater().inflate(R.layout.search_result,rows,false);
-                    result.setTag(hit.senseId());
-                    ((TextView)result.findViewById(R.id.result_word)).setText(hit.spelling());
-                    TextView translation = result.findViewById(R.id.result_translation);
-                    String preview = searchPreview(hit);
-                    translation.setVisibility(preview.isEmpty() ? View.GONE : View.VISIBLE);
-                    translation.setText(preview);
-                    addPronunciation(result.findViewById(R.id.result_line),hit.spelling(),hit.language());
-                    result.setOnClickListener(v -> {
+                    View result = wordRow(rows,hit.spelling(),searchPreview(hit),hit.language(),() -> {
                         rememberSearchPosition();
                         getSystemService(InputMethodManager.class).hideSoftInputFromWindow(query.getWindowToken(), 0);
                         query.clearFocus();
                         model.select(hit.entryId(),hit.senseId());
                         render();
                     });
-                    rows.addView(result);
+                    result.setTag(hit.senseId());
                 }
                 ScrollView scroll = findViewById(R.id.scroll);
                 scroll.post(() -> {
@@ -309,7 +297,7 @@ public final class MainActivity extends AppCompatActivity {
         var translations = ArticleDisplay.translations(sense,view.corpusVersion()!=null
                 && view.corpusVersion().startsWith("research-"));
         View hero = getLayoutInflater().inflate(R.layout.article_hero,rows,false);
-        ((TextView)hero.findViewById(R.id.article_word)).setText(entry.spelling());
+        ((TextView)hero.findViewById(R.id.article_word)).setText(TranslationDisplay.russian(entry.spelling()));
         TextView translation = hero.findViewById(R.id.article_translation);
         translation.setText(translations.isEmpty() ? getString(R.string.article_no_translation) : translations.get(0));
         TextView variants = hero.findViewById(R.id.article_variants);
@@ -336,9 +324,9 @@ public final class MainActivity extends AppCompatActivity {
         if (!pos.isEmpty()) addDetail(rows,getString(R.string.article_pos,pos));
         var levels = metadataValues(metadata,"cefr");
         if (!levels.isEmpty()) addDetail(rows,getString(R.string.article_level,String.join(" · ",levels)));
-        if (hasArticleDetails(entry,sense,metadata)) {
-            addTextAction(rows,R.string.article_more,() -> showArticleDetails(entry,sense,metadata));
-        }
+        articleExamples(rows,sense,metadata);
+        var details = articleDetails(entry,sense,metadata);
+        if (!details.isEmpty()) expandable(rows,R.string.article_more,content -> addDetail(content,String.join("\n\n",details)));
         var add = addAction(rows,getString(view.added() ? R.string.word_in_vocabulary : R.string.add_word),
                 () -> model.addWord(view,sense));
         add.setEnabled(!view.added());
@@ -396,31 +384,63 @@ public final class MainActivity extends AppCompatActivity {
         });
     }
 
-    private static boolean hasArticleDetails(DictionaryRepository.Entry entry,DictionaryRepository.Sense sense,
-                                             java.util.List<DictionaryRepository.Metadata> metadata) {
-        return !entry.forms().isEmpty() || (sense != null && (sense.context() != null || !sense.examples().isEmpty()))
-                || !metadataValues(metadata,"usage_example","style","region","source_gloss").isEmpty();
-    }
-
-    private void showArticleDetails(DictionaryRepository.Entry entry,DictionaryRepository.Sense sense,
-                                    java.util.List<DictionaryRepository.Metadata> metadata) {
+    private java.util.List<String> articleDetails(DictionaryRepository.Entry entry,DictionaryRepository.Sense sense,
+                                                   java.util.List<DictionaryRepository.Metadata> metadata) {
         var details = new java.util.ArrayList<String>();
         if (!entry.forms().isEmpty()) {
             var forms = new java.util.LinkedHashSet<String>();
             for (var form : entry.forms()) forms.add(form.grammar() == null ? form.spelling()
-                    : form.spelling()+" · "+localGrammar(form.grammar()));
+                    : form.spelling()+" — "+localGrammar(form.grammar()));
             details.add(getString(R.string.word_forms)+"\n"+String.join("\n",forms));
         }
         details.addAll(metadataValues(metadata,"style","region","source_gloss"));
-        if (sense != null) {
-            if (sense.context() != null) details.add(sense.context().text());
-            for (var example : sense.examples()) details.add(example.translation() == null ? example.body()
-                    : example.body()+"\n"+example.translation());
+        if (sense != null && sense.context() != null) details.add(sense.context().text());
+        return details;
+    }
+
+    private void articleExamples(LinearLayout rows,DictionaryRepository.Sense sense,
+                                 java.util.List<DictionaryRepository.Metadata> metadata) {
+        var examples = new java.util.ArrayList<String[]>();
+        if (sense != null) for (var example : sense.examples()) {
+            examples.add(new String[]{example.body(),example.translation()});
         }
-        var examples = metadataValues(metadata,"usage_example");
-        if (!examples.isEmpty()) details.add(getString(R.string.article_examples)+"\n"+String.join("\n\n",examples));
-        new MaterialAlertDialogBuilder(this).setTitle(R.string.article_more)
-                .setMessage(String.join("\n\n",details)).setPositiveButton(android.R.string.ok,null).show();
+        for (String example : metadataValues(metadata,"usage_example")) examples.add(example.split("\n",2));
+        if (examples.isEmpty()) return;
+        addSectionHeading(rows,getString(R.string.article_usage));
+        int visible = Math.min(2,examples.size());
+        for (int i=0;i<visible;i++) appendExample(rows,examples.get(i));
+        if (examples.size()>visible) expandable(rows,R.string.article_more_examples,content -> {
+            for (int i=visible;i<examples.size();i++) appendExample(content,examples.get(i));
+        });
+    }
+
+    private void appendExample(LinearLayout rows,String[] example) {
+        var original = inflateArticleDetail(rows);
+        original.setTextAppearance(com.google.android.material.R.style.TextAppearance_Material3_BodyLarge);
+        original.setText(example[0]);
+        rows.addView(original);
+        if (example.length>1 && example[1]!=null && !example[1].isEmpty()) {
+            addDetail(rows,TranslationDisplay.russian(example[1]));
+        }
+    }
+
+    private void expandable(LinearLayout rows,int title,java.util.function.Consumer<LinearLayout> fill) {
+        var content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setVisibility(View.GONE);
+        MaterialButton button = addAction(rows,R.layout.text_action_row,getString(title),() -> {
+            boolean expand = content.getVisibility()!=View.VISIBLE;
+            content.setVisibility(expand ? View.VISIBLE : View.GONE);
+        });
+        button.setIconResource(R.drawable.ic_expand);
+        button.setIconGravity(MaterialButton.ICON_GRAVITY_END);
+        content.addOnLayoutChangeListener((v,left,top,right,bottom,oldLeft,oldTop,oldRight,oldBottom) -> {
+            boolean expanded = v.getVisibility()==View.VISIBLE;
+            button.setContentDescription(getString(expanded ? R.string.collapse_section : R.string.expand_section,getString(title)));
+        });
+        button.setContentDescription(getString(R.string.expand_section,getString(title)));
+        fill.accept(content);
+        rows.addView(content);
     }
 
     private void showArticleSources(DictionaryRepository.Entry entry) {
@@ -504,7 +524,13 @@ public final class MainActivity extends AppCompatActivity {
         Screen screen = model.screen();
         if (screen == Screen.SEARCH || screen == Screen.ENTRY || screen == Screen.SETTINGS) return;
         LinearLayout rows = findViewById(R.id.results);
+        pronunciationControls.clear();
         rows.removeAllViews();
+        if (screen == Screen.STUDY) {
+            findViewById(R.id.screen_panel).setVisibility(View.GONE);
+            renderQuiz(rows);
+            return;
+        }
         var state = model.personalView.getValue();
         if (state == null || state.screen() != screen || state.collection() != model.collection()) return;
         TextView heading = findViewById(R.id.panel_title);
@@ -513,21 +539,19 @@ public final class MainActivity extends AppCompatActivity {
         body.setText(screen.body);
         switch (screen) {
             case VOCABULARY -> {
+                findViewById(R.id.screen_panel).setVisibility(state.savedCount()==0 ? View.VISIBLE : View.GONE);
                 if (state.savedCount() > 0) {
-                    heading.setText(R.string.saved_heading);
-                    if (state.rowCount() == 0 && !state.savedQuery().trim().isEmpty()) body.setText(R.string.no_saved_matches);
-                    else if (state.notesOnly() && state.rowCount() == 0) body.setText(R.string.no_saved_notes);
-                    else body.setText(getString(R.string.saved_count,state.rowCount()));
-                    var filters = addBlock(rows,getString(R.string.saved_filters));
-                    addOutlineAction(filters,getString(state.notesOnly() ? R.string.show_all_saved : R.string.show_saved_notes),
-                            model::toggleNotesFilter);
-                    if (state.savedCount() > 1) {
-                        addOutlineAction(filters,getString(state.alphabetical() ? R.string.sort_by_recent : R.string.sort_by_spelling),
-                                model::toggleSavedOrder);
-                    }
+                    if (state.rowCount() == 0) addDetail(rows,getString(state.notesOnly() && state.savedQuery().trim().isEmpty()
+                            ? R.string.no_saved_notes : R.string.no_saved_matches));
                 } else addAction(rows,getString(R.string.study_find_word),() -> open(Screen.SEARCH));
                 addPageControls(rows,state);
-                for (var item : state.saved()) addOutlineAction(rows,savedLabel(item),() -> savedMenu(item,state));
+                for (var item : state.saved()) {
+                    boolean source = item.custom.isEmpty();
+                    String answer = source ? TranslationDisplay.answer(item.answer,true,
+                            LocalDictionaryRepository.isResearchProfile(this)).replace(" · ",", ") : item.custom;
+                    wordRow(rows,item.spelling,answer,state.sourceLanguages().get(item.entryId),() -> savedMenu(item,state))
+                            .setTag(item.id);
+                }
             }
             case COLLECTIONS -> {
                 if (model.collection() == 0) {
@@ -546,7 +570,6 @@ public final class MainActivity extends AppCompatActivity {
                 }
             }
             case REVIEW -> renderLearning(rows,heading,body,state);
-            case STUDY -> renderExercise(rows,heading,body,state.exercise());
             case PROGRESS -> renderProgress(rows,heading,body,state);
             default -> { }
         }
@@ -558,6 +581,29 @@ public final class MainActivity extends AppCompatActivity {
                 if (model.screen() == screen) scroll.scrollTo(0,position);
             });
         }
+    }
+
+    private void vocabularyDisplay() {
+        var state = model.personalView.getValue();
+        if (state == null || state.screen()!=Screen.VOCABULARY) return;
+        String[] options = {getString(state.alphabetical() ? R.string.sort_by_recent : R.string.sort_by_spelling),
+                getString(state.notesOnly() ? R.string.show_all_saved : R.string.show_saved_notes)};
+        new MaterialAlertDialogBuilder(this).setTitle(R.string.saved_filters).setItems(options,(dialog,choice) -> {
+            if (choice == 0) model.toggleSavedOrder();
+            else model.toggleNotesFilter();
+        }).show();
+    }
+
+    private View wordRow(LinearLayout rows,String spelling,String preview,String language,Runnable open) {
+        View row = getLayoutInflater().inflate(R.layout.search_result,rows,false);
+        ((TextView)row.findViewById(R.id.result_word)).setText(TranslationDisplay.russian(spelling));
+        TextView translation = row.findViewById(R.id.result_translation);
+        translation.setVisibility(preview.isEmpty() ? View.GONE : View.VISIBLE);
+        translation.setText(preview);
+        addPronunciation(row.findViewById(R.id.result_line),spelling,language);
+        row.setOnClickListener(view -> open.run());
+        rows.addView(row);
+        return row;
     }
 
     private void renderProgress(LinearLayout rows,TextView heading,TextView body,FoundationViewModel.PersonalView state) {
@@ -756,23 +802,33 @@ public final class MainActivity extends AppCompatActivity {
 
     private void renderLearning(LinearLayout rows,TextView heading,TextView body,FoundationViewModel.PersonalView state) {
         var learning = state.learning();
-        if (model.canResumeStudy()) {
-            addAction(rows,getString(R.string.study_resume),() -> open(Screen.STUDY));
-        }
-        if (learning.cards == 0) {
-            addAction(rows,getString(state.savedCount() == 0 ? R.string.study_find_word : R.string.study_open_saved),
-                    () -> open(state.savedCount() == 0 ? Screen.SEARCH : Screen.VOCABULARY));
-            body.setText(state.savedCount() == 0 ? R.string.study_first_from_dictionary : R.string.study_first_from_saved);
-            return;
-        }
-        heading.setText(R.string.study_today);
-        body.setText(R.string.study_today_body);
-        if (learning.unstudied == 0 && learning.ready == 0) body.setText(R.string.study_up_to_date);
+        findViewById(R.id.screen_panel).setVisibility(View.GONE);
+        if (model.canResumeStudy()) addAction(rows,getString(R.string.study_resume),() -> open(Screen.STUDY));
         if (learning.nextDue != null) addDetail(rows,nextStudyLabel(learning.nextDue));
-        var plan = addBlock(rows,getString(R.string.study_choices));
-        addStudyAction(plan,R.string.study_new_count,learning.unstudied,FoundationViewModel.STUDY_NEW);
-        addStudyAction(plan,R.string.study_due_count,learning.ready,FoundationViewModel.STUDY_DUE);
-        addOutlineAction(plan,getString(R.string.study_by_collection),() -> open(Screen.COLLECTIONS));
+        if (learning.ready > 0) {
+            addAction(rows,getString(R.string.study_due_count,learning.ready),() -> model.startStudy(FoundationViewModel.STUDY_DUE,0));
+        } else addDetail(rows,getString(R.string.quiz_no_due));
+        if (learning.unstudied > 0) {
+            if (learning.ready == 0) addAction(rows,getString(R.string.study_new_count,learning.unstudied),
+                    () -> model.startStudy(FoundationViewModel.STUDY_NEW,0));
+            else addOutlineAction(rows,getString(R.string.study_new_count,learning.unstudied),
+                    () -> model.startStudy(FoundationViewModel.STUDY_NEW,0));
+        } else addDetail(rows,getString(R.string.quiz_no_new));
+        addOutlineAction(rows,getString(R.string.study_by_collection),() -> open(Screen.COLLECTIONS));
+        if (learning.cards == 0) {
+            addTextAction(rows,state.savedCount()==0 ? R.string.study_find_word : R.string.study_open_saved,
+                    () -> open(state.savedCount()==0 ? Screen.SEARCH : Screen.VOCABULARY));
+        }
+        addAction(rows,R.layout.text_action_row,getString(R.string.quiz_length,model.studyLimit()),() -> {
+            int[] lengths = {10,20,30};
+            String[] labels = java.util.Arrays.stream(lengths).mapToObj(value -> getString(R.string.quiz_length,value))
+                    .toArray(String[]::new);
+            new MaterialAlertDialogBuilder(this).setTitle(R.string.quiz_select_length)
+                    .setSingleChoiceItems(labels,(model.studyLimit()-10)/10,(dialog,index) -> {
+                        model.setStudyLimit(lengths[index]);
+                        dialog.dismiss();
+                    }).setNegativeButton(android.R.string.cancel,null).show();
+        });
     }
 
     private String nextStudyLabel(long due) {
@@ -781,52 +837,65 @@ public final class MainActivity extends AppCompatActivity {
         return getString(R.string.study_next_date,date);
     }
 
-    private void addStudyAction(LinearLayout rows,int label,int count,int mode) {
-        addAction(rows,getString(label,count),() -> model.startStudy(mode,0)).setEnabled(count > 0);
-    }
-
-    private void renderExercise(LinearLayout rows,TextView heading,TextView body,PersonalDatabase.Exercise exercise) {
-        if (exercise == null) {
-            int reviewed = model.sessionReviewed();
-            if (reviewed > 0) {
-                heading.setText(R.string.review_session_finished);
-                body.setText(getString(R.string.review_session_summary,reviewed,model.sessionSuccessful(),
-                        reviewed-model.sessionSuccessful()));
-            } else {
-                heading.setText(R.string.no_review);
-                body.setText(R.string.study_none_available);
-            }
+    private void renderQuiz(LinearLayout rows) {
+        var quiz = model.quiz();
+        if (quiz == null) {
+            addDetail(rows,getString(R.string.quiz_none_available));
             addAction(rows,getString(R.string.study_home),() -> open(Screen.REVIEW));
-            if (reviewed > 0) addOutlineAction(rows,getString(R.string.open_progress),() -> open(Screen.PROGRESS));
             return;
         }
-        addDetail(rows,getString(R.string.study_position,model.studyPosition()+1,model.studyTotal()));
+        if (quiz.finished()) {
+            addSectionHeading(rows,getString(R.string.review_session_finished));
+            int count = quiz.answered();
+            addDetail(rows,getString(R.string.quiz_summary,count,quiz.uniqueWords(),quiz.correct(),
+                    count-quiz.correct(),count==0 ? 0 : quiz.correct()*100/count));
+            if (quiz.nextDue()!=null) addDetail(rows,nextStudyLabel(quiz.nextDue()));
+            if (quiz.saved()) {
+                addAction(rows,getString(R.string.study_home),() -> open(Screen.REVIEW));
+                addTextAction(rows,R.string.open_progress,() -> open(Screen.PROGRESS));
+            } else if (model.grading()) addDetail(rows,getString(R.string.quiz_saving));
+            else addAction(rows,getString(R.string.quiz_retry_save),() -> { model.advanceQuiz(); renderPersonal(); });
+            return;
+        }
+        var question = quiz.question();
+        addDetail(rows,getString(R.string.study_position,quiz.position()+1,quiz.total()));
         var progress = (com.google.android.material.progressindicator.LinearProgressIndicator)getLayoutInflater()
                 .inflate(R.layout.activity_day,rows,false);
-        progress.setMax(model.studyTotal());
-        progress.setProgress(model.studyPosition()+1);
+        progress.setMax(quiz.total());
+        progress.setProgress(quiz.position()+1);
         rows.addView(progress);
-        String answer = TranslationDisplay.answer(exercise.answer,exercise.sourceAnswer,
-                LocalDictionaryRepository.isResearchProfile(this));
-        heading.setText(exercise.reverse ? answer : exercise.spelling);
-        if (!model.answerShown(exercise)) {
-            body.setText(R.string.review_prompt);
-            addAction(rows,getString(R.string.reveal),() -> { model.revealAnswer(exercise); renderPersonal(); });
-            return;
-        }
-        body.setText(exercise.reverse ? exercise.spelling : answer);
-        addSectionHeading(rows,getString(R.string.study_assess));
-        String[] choices = getResources().getStringArray(R.array.review_ratings);
-        for (int i = 0; i < choices.length; i++) {
-            int rating = i;
-            var next = ReviewScheduler.basic(exercise.intervalDays,rating,0);
-            String wait = next.days() == 0
-                    ? getString(R.string.study_minutes,next.due()/60_000)
-                    : getString(R.string.study_days,next.days());
-            addOutlineAction(rows,getString(R.string.study_rating_with_interval,choices[i],wait),() -> {
-                model.grade(exercise,rating);
+        boolean englishFirst = "en".equals(question.word().language()) != question.reverse();
+        addDetail(rows,getString(englishFirst ? R.string.forward_search : R.string.reverse_search));
+        var prompt = inflateArticleDetail(rows);
+        prompt.setTextAppearance(R.style.PageHeading);
+        prompt.setText(question.prompt());
+        prompt.setAccessibilityHeading(true);
+        rows.addView(prompt);
+
+        boolean answered = quiz.selected() >= 0;
+        for (int i=0;i<question.options().size();i++) {
+            int index = i;
+            String option = question.options().get(i);
+            boolean correct = question.correct().equals(option);
+            CharSequence label = !answered ? option : correct ? getString(R.string.quiz_correct_option,option)
+                    : i==quiz.selected() ? getString(R.string.quiz_wrong_option,option) : option;
+            var button = addOutlineAction(rows,label,() -> {
+                model.answerQuiz(index);
                 renderPersonal();
-            }).setEnabled(!model.grading());
+            });
+            if (answered) {
+                button.setClickable(false);
+                if (correct || i==quiz.selected()) {
+                    int color = getColor(correct ? R.color.quiz_correct : R.color.quiz_wrong);
+                    button.setTextColor(color);
+                    button.setStrokeColor(android.content.res.ColorStateList.valueOf(color));
+                }
+            }
+        }
+        if (answered) {
+            boolean correct = question.correct().equals(question.options().get(quiz.selected()));
+            addDetail(rows,getString(correct ? R.string.quiz_correct : R.string.quiz_incorrect));
+            addAction(rows,getString(R.string.quiz_continue),() -> { model.advanceQuiz(); renderPersonal(); });
         }
     }
 

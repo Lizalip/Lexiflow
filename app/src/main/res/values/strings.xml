@@ -1,4 +1,22 @@
 <resources>
+    <string name="quiz_no_due">Пока нет слов к повторению.</string>
+    <string name="quiz_no_new">Чтобы начать, добавьте новое слово из словаря.</string>
+    <string name="quiz_length">До %1$d заданий</string>
+    <string name="quiz_select_length">Длина занятия</string>
+    <string name="quiz_none_available">Пока недостаточно слов для однозначного задания.</string>
+    <string name="quiz_summary">Заданий: %1$d\nУникальных слов: %2$d\nПравильно: %3$d\nОшибки: %4$d\nТочность: %5$d%%</string>
+    <string name="quiz_saving">Сохраняем результаты…</string>
+    <string name="quiz_retry_save">Повторить сохранение</string>
+    <string name="quiz_correct_option">✓ %1$s</string>
+    <string name="quiz_wrong_option">✕ %1$s</string>
+    <string name="quiz_correct">Верно</string>
+    <string name="quiz_incorrect">Попробуйте запомнить правильный вариант.</string>
+    <string name="quiz_continue">Продолжить</string>
+    <string name="search_no_match_help">Проверьте написание или введите начало слова.</string>
+    <string name="article_usage">Примеры употребления</string>
+    <string name="article_more_examples">Ещё примеры</string>
+    <string name="expand_section">Развернуть «%1$s»</string>
+    <string name="collapse_section">Свернуть «%1$s»</string>
     <string name="app_name">LexiFlow</string>
     <string name="search">Поиск</string>
     <string name="vocabulary">Мой словарь</string>

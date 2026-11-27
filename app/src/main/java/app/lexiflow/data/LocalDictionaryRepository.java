@@ -847,6 +847,48 @@ public final class LocalDictionaryRepository implements DictionaryRepository {
         return result;
     }
 
+    public record QuizCandidate(String spelling,String translation,String pos) {}
+
+    public synchronized List<String> quizKnownTranslations(String language,String spelling) {
+        if (database == null) return Collections.emptyList();
+        String key = SearchNormalization.normalize(spelling);
+        boolean bilingual = manifest.schema()==3;
+        String sql = "SELECT DISTINCT t.wording FROM entry e JOIN sense s ON s.entry_id=e.id "
+                +"JOIN translation t ON t.sense_id=s.id WHERE e.search_key=?"
+                +(bilingual ? " AND e.language=?" : "")+" LIMIT 128";
+        var result = new ArrayList<String>();
+        try (Cursor rows = database.rawQuery(sql,bilingual ? new String[]{key,language} : new String[]{key})) {
+            while (rows.moveToNext()) result.add(rows.getString(0));
+        }
+        return result;
+    }
+
+    public synchronized List<QuizCandidate> quizCandidates(String language,String pos,String spelling,String reversePrompt) {
+        if (database == null || (manifest.schema()!=3 && !"en".equals(language))) return Collections.emptyList();
+        var result = new ArrayList<QuizCandidate>();
+        String languageFilter = manifest.schema()==3 ? " AND language=?" : "";
+        String key = SearchNormalization.normalize(spelling);
+        String suppressMatches = reversePrompt == null ? "" : " AND NOT EXISTS (SELECT 1 FROM entry same "
+                +"JOIN sense sx ON sx.entry_id=same.id JOIN translation tx ON tx.sense_id=sx.id "
+                +"WHERE same.search_key=sampled.search_key AND replace(tx.search_key,char(769),'')=?)";
+        // Sample neighbouring indexed headwords first and wrap to the beginning of the dictionary.
+        for (String range : new String[]{">=","<"}) {
+            String sql = "SELECT sampled.spelling,t.wording,sampled.pos FROM (SELECT id,spelling,pos,search_key FROM entry "
+                    +"WHERE search_key "+range+" ?"+languageFilter+" ORDER BY search_key LIMIT 36) sampled "
+                    +"JOIN sense s ON s.entry_id=sampled.id JOIN translation t ON t.sense_id=s.id "
+                +"WHERE 1=1"+suppressMatches+" ORDER BY CASE WHEN sampled.pos=? THEN 0 ELSE 1 END,sampled.spelling LIMIT 72";
+            var args = new ArrayList<String>();
+            args.add(key);
+            if (manifest.schema()==3) args.add(language);
+            if (reversePrompt!=null) args.add(SearchNormalization.normalize(reversePrompt).replace("\u0301",""));
+            args.add(pos==null ? "" : pos);
+            try (Cursor rows = database.rawQuery(sql,args.toArray(new String[0]))) {
+                while (rows.moveToNext()) result.add(new QuizCandidate(rows.getString(0),rows.getString(1),rows.getString(2)));
+            }
+        }
+        return result;
+    }
+
     private List<Metadata> metadata(String id,boolean sense) {
         if (manifest.schema() == 1) return Collections.emptyList();
         List<Metadata> result = new ArrayList<>();

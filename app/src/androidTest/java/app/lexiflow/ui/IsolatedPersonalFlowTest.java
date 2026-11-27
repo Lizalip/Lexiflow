@@ -43,12 +43,12 @@ public class IsolatedPersonalFlowTest {
         }
         byte[] originalPackage = Files.readAllBytes(pointer);
         String[] actions = context.getResources().getStringArray(R.array.saved_actions);
-        String[] ratings = context.getResources().getStringArray(R.array.review_ratings);
+
         String collection = "Runtime fixture collection";
         String renamed = "Renamed runtime fixture";
         String custom = "Runtime test translation";
         String note = "Runtime test note";
-        String savedLabel = "zeta-demo · " + custom + "\n" + note;
+
         try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
             NavigationTest.awaitDictionary(scenario);
             capture(scenario,"01-dictionary");
@@ -63,7 +63,7 @@ public class IsolatedPersonalFlowTest {
             back();
             onView(withId(R.id.vocabulary)).perform(click());
             await(scenario,state -> state.screen() == Screen.VOCABULARY && state.savedCount() == 1,"one saved sense");
-            onView(withText(startsWith("zeta-demo · демо-объект"))).perform(scrollTo(),click());
+            savedResult().perform(scrollTo(),click());
             onView(withText(actions[1])).perform(click());
             onView(withHint(R.string.custom_translation)).perform(replaceText(custom));
             onView(withHint(R.string.note)).perform(replaceText(note),closeSoftKeyboard());
@@ -71,17 +71,19 @@ public class IsolatedPersonalFlowTest {
             await(scenario,state -> state.saved().stream().anyMatch(item -> custom.equals(item.custom)
                     && note.equals(item.note)),"personal fields saved");
             capture(scenario,"04-vocabulary");
-            action(R.string.show_saved_notes);
+            onView(withId(R.id.vocabulary_display)).perform(click());
+            onView(withText(R.string.show_saved_notes)).perform(click());
             await(scenario,state -> state.notesOnly() && state.rowCount() == 1,"note filter applied");
-            action(R.string.show_all_saved);
+            onView(withId(R.id.vocabulary_display)).perform(click());
+            onView(withText(R.string.show_all_saved)).perform(click());
             await(scenario,state -> !state.notesOnly() && state.savedCount() == 1,"note filter cleared");
-            onView(withId(R.id.saved_query)).perform(scrollTo(),replaceText("TEST NOTE"),closeSoftKeyboard());
+            onView(withId(R.id.saved_query)).perform(scrollTo(),replaceText("TEST NOTE"));
             await(scenario,state -> state.savedQuery().equals("TEST NOTE") && state.rowCount() == 1,"matches note");
-            onView(withId(R.id.saved_query)).perform(replaceText("*"),closeSoftKeyboard());
+            onView(withId(R.id.saved_query)).perform(replaceText("*"));
             await(scenario,state -> state.savedQuery().equals("*") && state.rowCount() == 0,"literal wildcard");
-            onView(withId(R.id.saved_query)).perform(clearText(),closeSoftKeyboard());
+            onView(withId(R.id.saved_query)).perform(clearText());
             await(scenario,state -> state.savedQuery().isEmpty() && state.rowCount() == 1,"search cleared");
-            onView(withId(R.id.action)).perform(scrollTo(),click());
+            onView(withId(R.id.vocabulary_collections)).perform(click());
             await(scenario,state -> state.screen() == Screen.COLLECTIONS,"collections loaded");
             action(R.string.create_collection);
             editCollection(collection);
@@ -97,11 +99,11 @@ public class IsolatedPersonalFlowTest {
             await(scenario,state -> state.screen() == Screen.COLLECTIONS && state.collection() == 0,"collection list");
             back();
             await(scenario,state -> state.screen() == Screen.VOCABULARY,"vocabulary loaded");
-            savedAction(savedLabel,actions[2]);
+            savedAction(actions[2]);
             onView(withText(renamed)).perform(click());
-            savedAction(savedLabel,actions[3]);
-            savedAction(savedLabel,actions[4]);
-            onView(withId(R.id.action)).perform(scrollTo(),click());
+            savedAction(actions[3]);
+            savedAction(actions[4]);
+            onView(withId(R.id.vocabulary_collections)).perform(click());
             await(scenario,state -> state.screen() == Screen.COLLECTIONS && state.collection() == 0,
                     "collection list reloaded");
             onView(withText(renamed)).perform(scrollTo(),click());
@@ -110,30 +112,21 @@ public class IsolatedPersonalFlowTest {
             back();
             back();
             onView(withId(R.id.review)).perform(click());
-            await(scenario,state -> state.screen() == Screen.REVIEW && state.learning().unstudied == 2,"new cards counted");
-            onView(withText(context.getString(R.string.study_new_count,2))).perform(scrollTo(),click());
-            await(scenario,state -> state.exercise() != null && !state.exercise().reverse,"forward exercise");
-            onView(withId(R.id.panel_title)).check(matches(withText("zeta-demo")));
+            await(scenario,state -> state.screen() == Screen.REVIEW && state.learning().unstudied == 1,"one value counted");
+            onView(withText(context.getString(R.string.study_new_count,1))).perform(scrollTo(),click());
+            var first = RealResearchFlowTest.awaitQuiz(scenario,quiz -> quiz.question()!=null).question();
+            assertEquals(custom,first.correct());
             capture(scenario,"06-review-front");
-            action(R.string.reveal);
-            onView(withId(R.id.body)).check(matches(withText(custom)));
+            onView(withText(custom)).perform(scrollTo(),click());
             scenario.recreate();
-            await(scenario,state -> state.exercise() != null && !state.exercise().reverse,"revealed exercise restored");
-            onView(withId(R.id.body)).check(matches(withText(custom)));
+            RealResearchFlowTest.awaitQuiz(scenario,quiz -> quiz.selected()>=0);
             capture(scenario,"07-review-answer");
-            onView(withText(startsWith(ratings[1]+" · "))).perform(scrollTo(),click());
-            await(scenario,state -> state.exercise() != null && state.exercise().reverse,"reverse exercise");
-            onView(withId(R.id.panel_title)).check(matches(withText(custom)));
-            action(R.string.reveal);
-            onView(withId(R.id.body)).check(matches(withText("zeta-demo")));
-            onView(withText(startsWith(ratings[2]+" · "))).perform(scrollTo(),click());
-            await(scenario,state -> state.screen() == Screen.STUDY && state.exercise() == null,"review queue completed");
-            onView(withId(R.id.panel_title)).check(matches(withText(R.string.review_session_finished)));
-            onView(withId(R.id.body)).check(matches(withText(context.getString(R.string.review_session_summary,2,2,0))));
+            action(R.string.quiz_continue);
+            RealResearchFlowTest.awaitQuiz(scenario,QuizSession::saved);
             action(R.string.study_home);
             onView(withId(R.id.progress)).perform(click());
-            await(scenario,state -> state.screen() == Screen.PROGRESS && state.reviewed() == 2
-                    && state.successful() == 2,"reviews counted");
+            await(scenario,state -> state.screen() == Screen.PROGRESS && state.reviewed() == 1
+                    && state.successful() == 1,"reviews counted");
             capture(scenario,"08-progress");
             onView(withId(R.id.settings)).perform(click());
             NavigationTest.awaitDictionary(scenario);
@@ -147,8 +140,8 @@ public class IsolatedPersonalFlowTest {
             onView(withId(R.id.vocabulary)).perform(click());
             await(reopened,state -> state.savedCount() == 1 && state.saved().stream().anyMatch(
                     item -> custom.equals(item.custom) && note.equals(item.note)), "data survived reopen and V2");
-            onView(withText(savedLabel)).check(matches(isDisplayed()));
-            onView(withId(R.id.action)).perform(scrollTo(),click());
+            savedResult().check(matches(isDisplayed()));
+            onView(withId(R.id.vocabulary_collections)).perform(click());
             await(reopened,state -> state.screen() == Screen.COLLECTIONS
                     && state.collections().stream().anyMatch(item -> item.name.equals(renamed)), "collection survived reopen");
             onView(withText(renamed)).perform(scrollTo(),click());
@@ -160,7 +153,7 @@ public class IsolatedPersonalFlowTest {
             back();
             await(reopened,state -> state.screen() == Screen.VOCABULARY && state.savedCount() == 1,
                     "saved entry preserved after collection deletion");
-            onView(withText(savedLabel)).check(matches(isDisplayed()));
+            savedResult().check(matches(isDisplayed()));
             reopened.onActivity(activity -> new ViewModelProvider(activity).get(FoundationViewModel.class)
                     .changePersonal(library -> {
                         for (int i = 0; i < 32; i++) {
@@ -171,7 +164,7 @@ public class IsolatedPersonalFlowTest {
                         }
                     }));
             await(reopened,state -> state.screen() == Screen.VOCABULARY && state.savedCount() == 33,"long saved list");
-            onView(withText(savedLabel)).perform(scrollTo());
+            savedResult().perform(scrollTo());
             int[] scrollThroughSettings = new int[1];
             reopened.onActivity(activity ->
                     scrollThroughSettings[0] = activity.findViewById(R.id.scroll).getScrollY());
@@ -183,7 +176,7 @@ public class IsolatedPersonalFlowTest {
                 if (error != null) throw error;
                 assertEquals(scrollThroughSettings[0],view.getScrollY());
             });
-            onView(withText(savedLabel)).perform(scrollTo(),click());
+            savedResult().perform(scrollTo(),click());
             int[] scrollBefore = new int[1];
             reopened.onActivity(activity -> scrollBefore[0] = activity.findViewById(R.id.scroll).getScrollY());
             assertTrue("saved row below the fold",scrollBefore[0] > 0);
@@ -249,8 +242,11 @@ public class IsolatedPersonalFlowTest {
 
     private static void back() { onView(withContentDescription(R.string.back)).perform(click()); }
     private static void action(int label) { onView(withText(label)).perform(scrollTo(),click()); }
-    private static void savedAction(String label,String action) {
-        onView(withText(label)).perform(scrollTo(),click());
+    private static androidx.test.espresso.ViewInteraction savedResult() {
+        return onView(org.hamcrest.Matchers.allOf(withId(R.id.result_word),withText("zeta-demo")));
+    }
+    private static void savedAction(String action) {
+        savedResult().perform(scrollTo(),click());
         onView(withText(action)).perform(click());
     }
     private static void editCollection(String name) {

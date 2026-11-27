@@ -16,22 +16,28 @@
 
     <com.google.android.material.textfield.TextInputLayout
         android:id="@+id/query_box" android:layout_width="match_parent" android:layout_height="wrap_content"
-        android:layout_marginTop="@dimen/space_large" android:hint="@string/query_hint"
+        android:layout_marginTop="@dimen/space_small" android:hint="@string/query_hint"
+        app:boxCornerRadiusTopStart="12dp" app:boxCornerRadiusTopEnd="12dp"
+        app:boxCornerRadiusBottomStart="12dp" app:boxCornerRadiusBottomEnd="12dp"
         app:startIconDrawable="@drawable/ic_search" app:endIconMode="clear_text"
         style="@style/Widget.Material3.TextInputLayout.OutlinedBox">
         <com.google.android.material.textfield.TextInputEditText
             android:id="@+id/query" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:minHeight="@dimen/action_touch_target" android:paddingVertical="12dp"
             android:maxLength="256" android:maxLines="1" android:inputType="text" android:imeOptions="actionDone"
             android:importantForAutofill="no" android:saveEnabled="false" />
     </com.google.android.material.textfield.TextInputLayout>
 
     <com.google.android.material.textfield.TextInputLayout
         android:id="@+id/saved_query_box" android:layout_width="match_parent" android:layout_height="wrap_content"
-        android:layout_marginTop="@dimen/space_large" android:hint="@string/saved_query_hint"
+        android:layout_marginTop="@dimen/space_small" android:hint="@string/saved_query_hint"
+        app:boxCornerRadiusTopStart="12dp" app:boxCornerRadiusTopEnd="12dp"
+        app:boxCornerRadiusBottomStart="12dp" app:boxCornerRadiusBottomEnd="12dp"
         app:startIconDrawable="@drawable/ic_search" app:endIconMode="clear_text"
         style="@style/Widget.Material3.TextInputLayout.OutlinedBox">
         <com.google.android.material.textfield.TextInputEditText
             android:id="@+id/saved_query" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:minHeight="@dimen/action_touch_target" android:paddingVertical="12dp"
             android:maxLength="256" android:maxLines="1" android:inputType="text" android:imeOptions="actionDone"
             android:importantForAutofill="no" android:saveEnabled="false" />
     </com.google.android.material.textfield.TextInputLayout>

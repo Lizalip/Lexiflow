@@ -70,10 +70,12 @@ public abstract class PersonalDatabase extends RoomDatabase {
 
     public static class Exercise {
         public long id;
+        public long savedId;
         public boolean reverse;
         public long due;
         public int intervalDays;
         @NonNull public String entryId = "";
+        @NonNull public String senseId = "";
         @NonNull public String spelling = "";
         @NonNull public String answer = "";
         public boolean sourceAnswer;
@@ -140,9 +142,13 @@ public abstract class PersonalDatabase extends RoomDatabase {
         }
 
         private static final String STUDIED = "EXISTS (SELECT 1 FROM review_events e WHERE e.cardId=c.id)";
-        @Query("SELECT count(*) AS cards, count(CASE WHEN NOT "+STUDIED+" THEN 1 END) AS unstudied,"
-                + "count(CASE WHEN c.due<=:now AND "+STUDIED+" THEN 1 END) AS ready,"
-                + "min(CASE WHEN c.due>:now THEN c.due END) AS nextDue FROM cards c WHERE c.savedId IS NOT NULL")
+        private static final String LEARNED = "EXISTS (SELECT 1 FROM cards old JOIN review_events e ON e.cardId=old.id"
+                + " WHERE old.savedId=s.id)";
+        @Query("SELECT count(*) AS cards, count(CASE WHEN NOT learned AND due<=:now THEN 1 END) AS unstudied,"
+                + "count(CASE WHEN learned AND due<=:now THEN 1 END) AS ready,"
+                + "min(CASE WHEN due>:now THEN due END) AS nextDue FROM (SELECT s.id,min(c.due) AS due,"
+                + LEARNED+" AS learned FROM saved s JOIN cards c ON c.savedId=s.id"
+                + " WHERE s.custom<>'' OR s.answer<>'' GROUP BY s.id)")
         public abstract LearningCounts learningCounts(long now);
 
         @Query("SELECT c.id FROM cards c WHERE c.savedId IS NOT NULL AND c.due<=:now "
@@ -151,13 +157,21 @@ public abstract class PersonalDatabase extends RoomDatabase {
                 + "ORDER BY c.due,c.id LIMIT :limit")
         public abstract List<Long> learningQueue(long now,int mode,long collection,int limit);
 
-        private static final String EXERCISE = "SELECT c.id,c.reverse,c.due,c.intervalDays,s.entryId,s.spelling,"
+        private static final String EXERCISE = "SELECT c.id,s.id AS savedId,c.reverse,c.due,c.intervalDays,s.entryId,s.senseId,s.spelling,"
                 + "CASE WHEN s.custom='' THEN s.answer ELSE s.custom END AS answer, s.custom='' AS sourceAnswer "
                 + "FROM cards c JOIN saved s ON s.id=c.savedId ";
         @Query(EXERCISE+"WHERE c.id=:id AND c.due<=:now")
         public abstract Exercise learningExercise(long id,long now);
 
-        @Query("SELECT c.id,c.reverse,c.due,c.intervalDays,s.entryId,s.spelling, CASE WHEN s.custom='' THEN s.answer ELSE s.custom END AS answer, "
+        @Query(EXERCISE+"WHERE c.due<=:now AND (s.custom<>'' OR s.answer<>'') "
+                +"AND c.id=(SELECT sibling.id FROM cards sibling WHERE sibling.savedId=s.id AND sibling.due<=:now "
+                +"ORDER BY sibling.due,sibling.id LIMIT 1) "
+                +"AND (:mode=0 OR (:mode=1 AND NOT "+LEARNED+") OR (:mode=2 AND "+LEARNED+")) "
+                +"AND (:collection=0 OR EXISTS (SELECT 1 FROM members m WHERE m.collectionId=:collection AND m.savedId=s.id)) "
+                +"ORDER BY c.due,c.id LIMIT :limit")
+        public abstract List<Exercise> quizQueue(long now,int mode,long collection,int limit);
+
+        @Query("SELECT c.id,s.id AS savedId,c.reverse,c.due,c.intervalDays,s.entryId,s.senseId,s.spelling, CASE WHEN s.custom='' THEN s.answer ELSE s.custom END AS answer, "
                 + "s.custom='' AS sourceAnswer "
                 + "FROM cards c JOIN saved s ON s.id=c.savedId WHERE c.due<=:now ORDER BY c.due,c.id LIMIT 1")
         public abstract Exercise next(long now);
@@ -169,6 +183,26 @@ public abstract class PersonalDatabase extends RoomDatabase {
         public abstract List<Long> reviewTimes(long start,long end);
         @Query("UPDATE cards SET due=:next,intervalDays=:days WHERE id=:id AND due=:expected AND savedId IS NOT NULL")
         abstract int reschedule(long id,long expected,long next,int days);
+
+        @Query("UPDATE cards SET due=:next,intervalDays=:days WHERE savedId=:saved AND id<>:primary AND due<=:now")
+        abstract void alignDueCards(long saved,long primary,long now,long next,int days);
+
+        public record QuizGrade(long card,long saved,long expectedDue,int days,int rating) {}
+
+        @Transaction
+        public void gradeQuiz(List<QuizGrade> grades,long now) {
+            for (var grade : grades) {
+                if (grade.expectedDue()>now) continue;
+                var next = ReviewScheduler.basic(grade.days(),grade.rating(),now);
+                if (reschedule(grade.card(),grade.expectedDue(),next.due(),next.days()) != 1) continue;
+                alignDueCards(grade.saved(),grade.card(),now,next.due(),next.days());
+                var event = new Event();
+                event.cardId = grade.card();
+                event.reviewedAt = now;
+                event.rating = grade.rating();
+                addEvent(event);
+            }
+        }
 
         @Transaction
         public boolean grade(Exercise exercise,int rating,long now,ReviewScheduler scheduler) {

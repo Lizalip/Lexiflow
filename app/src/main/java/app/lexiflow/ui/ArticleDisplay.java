@@ -18,7 +18,7 @@ final class ArticleDisplay {
     static List<String> translations(Sense sense,boolean research) {
         var values = new LinkedHashSet<String>();
         if (sense != null) for (String value : sense.translations()) {
-            String display = research ? TranslationDisplay.wording(value).trim() : value.trim();
+            String display = TranslationDisplay.russian(research ? TranslationDisplay.wording(value) : value).trim();
             if (!display.isEmpty()) values.add(display);
         }
         return new ArrayList<>(values);

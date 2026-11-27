@@ -10,7 +10,6 @@ import androidx.room.Room;
 import app.lexiflow.data.DictionaryRepository;
 import app.lexiflow.data.LocalDictionaryRepository;
 import app.lexiflow.data.PersonalDatabase;
-import app.lexiflow.data.ReviewScheduler;
 import app.lexiflow.R;
 import java.util.List;
 import java.util.Map;
@@ -34,6 +33,7 @@ public final class FoundationViewModel extends ViewModel {
     }
     private LocalDictionaryRepository dictionary;
     private PersonalDatabase personal;
+    private android.content.SharedPreferences preferences;
     private Handler main;
     private ExecutorService worker;
     private Runnable scheduled;
@@ -44,12 +44,10 @@ public final class FoundationViewModel extends ViewModel {
     final MutableLiveData<LocalDictionaryRepository.ActivationStage> activation = new MutableLiveData<>();
     static final int PERSONAL_PAGE_SIZE = 50;
     static final int STUDY_ALL = 0, STUDY_NEW = 1, STUDY_DUE = 2;
-    static final int STUDY_LIMIT = 20;
-    private static final long[] EMPTY_QUEUE = {};
     record PersonalView(Screen screen,long collection,int page,int rowCount,int savedCount,
                         boolean notesOnly,String savedQuery,boolean alphabetical,
                         List<PersonalDatabase.Saved> saved, Map<String,String> sourceLanguages, List<PersonalDatabase.Collection> collections,
-                        PersonalDatabase.Exercise exercise,int cards,int due,int reviewed,int successful,
+                        int cards,int due,int reviewed,int successful,
                         PersonalDatabase.LearningCounts learning,List<ActivityDay> activity,
                         List<PersonalDatabase.Saved> collectionCandidates) {}
     record ActivityDay(LocalDate date,int reviews) {}
@@ -57,6 +55,7 @@ public final class FoundationViewModel extends ViewModel {
     final MutableLiveData<Boolean> personalError = new MutableLiveData<>();
     final MutableLiveData<Integer> notice = new MutableLiveData<>();
     final MutableLiveData<Boolean> studyNavigation = new MutableLiveData<>();
+    final MutableLiveData<Boolean> quizUpdated = new MutableLiveData<>();
     private boolean grading;
     private boolean preparingStudy;
 
@@ -79,6 +78,8 @@ public final class FoundationViewModel extends ViewModel {
             }
         }));
         personal = Room.databaseBuilder(context.getApplicationContext(),PersonalDatabase.class,"lexiflow-personal.sqlite").build();
+        preferences = context.getApplicationContext().getSharedPreferences("lexiflow-learning",Context.MODE_PRIVATE);
+        if (!state.contains("quizLimit")) state.set("quizLimit",preferences.getInt("quizLimit",20));
         main = new Handler(Looper.getMainLooper());
         worker = Executors.newSingleThreadExecutor();
     }
@@ -92,6 +93,10 @@ public final class FoundationViewModel extends ViewModel {
         final String senseId = selectedSense();
         final boolean reverse = reverse();
         final Screen screen = screen();
+        if (screen == Screen.STUDY) {
+            finishQuiz();
+            return;
+        }
         if (screen != Screen.SEARCH && screen != Screen.ENTRY && screen != Screen.SETTINGS) {
             refreshPersonal();
             return;
@@ -136,8 +141,6 @@ public final class FoundationViewModel extends ViewModel {
         boolean notesOnly = target == Screen.VOCABULARY && notesOnly();
         boolean alphabetical = target == Screen.VOCABULARY && alphabetical();
         String savedQuery = target == Screen.VOCABULARY ? savedQuery() : "";
-        long[] queue = studyQueue();
-        int position = studyPosition();
         worker.execute(() -> {
             try {
                 PersonalDatabase.Library library = personal.library();
@@ -158,19 +161,11 @@ public final class FoundationViewModel extends ViewModel {
                                 : library.savedPage(PERSONAL_PAGE_SIZE,offset))
                         : target == Screen.COLLECTIONS && collection != 0
                         ? library.collectionPage(collection,PERSONAL_PAGE_SIZE,offset) : Collections.emptyList();
-                int next = position;
-                PersonalDatabase.Exercise card = null;
-                if (target == Screen.STUDY) {
-                    while (next < queue.length && (card = library.learningExercise(queue[next],now)) == null) next++;
-                }
-                final int nextPosition = next;
                 var entryIds = saved.stream().map(row -> row.entryId).collect(java.util.stream.Collectors.toSet());
-                if (card != null) entryIds.add(card.entryId);
                 var snapshot = new PersonalView(target,collection,page,rowCount,savedCount,notesOnly,savedQuery,alphabetical,saved,
                         dictionary.sourceLanguages(entryIds),
                         target == Screen.VOCABULARY || target == Screen.COLLECTIONS || target == Screen.PROGRESS || target == Screen.REVIEW
                                 ? library.collections() : Collections.emptyList(),
-                        card,
                         target == Screen.PROGRESS ? library.cardCount() : 0,
                         target == Screen.PROGRESS ? library.dueCount(now) : 0,
                         target == Screen.PROGRESS ? library.reviewCount() : 0,
@@ -185,13 +180,6 @@ public final class FoundationViewModel extends ViewModel {
                             || (target == Screen.VOCABULARY
                             && (notesOnly != notesOnly() || alphabetical != alphabetical()
                             || !savedQuery.equals(savedQuery())))) return;
-                    if (target == Screen.STUDY) {
-                        if (queue != studyQueue() || position != studyPosition()) return;
-                        state.set("studyPosition",nextPosition);
-                        if (snapshot.exercise() == null && sessionReviewed() > 0) {
-                            state.set("reviewSessionFinished",true);
-                        }
-                    }
                     state.set(pageKey(target),page);
                     personalError.setValue(false);
                     personalView.setValue(snapshot);
@@ -253,45 +241,41 @@ public final class FoundationViewModel extends ViewModel {
     }
 
     void learn(PersonalDatabase.Saved item) {
-        if (worker == null || preparingStudy || grading || (item.answer.trim().isEmpty() && item.custom.trim().isEmpty())) return;
-        prepareStudy(STUDY_NEW,library -> {
+        if (item.answer.trim().isEmpty() && item.custom.trim().isEmpty()) return;
+        prepareQuiz(library -> {
             long now = System.currentTimeMillis();
-            long card = library.learn(item,now);
-            return library.learningExercise(card,now) == null ? EMPTY_QUEUE : new long[] {card};
-        },R.string.study_already_scheduled);
+            long id = library.learn(item,now);
+            var exercise = library.learningExercise(id,now);
+            return exercise == null ? Collections.emptyList() : Collections.singletonList(exercise);
+        });
     }
 
     void startStudy(int mode,long collection) {
-        if (worker == null || preparingStudy || grading) return;
-        prepareStudy(mode, library -> library.learningQueue(System.currentTimeMillis(),mode,collection,STUDY_LIMIT)
-                .stream().mapToLong(Long::longValue).toArray(),R.string.study_none_available);
+        prepareQuiz(library -> library.quizQueue(System.currentTimeMillis(),mode,collection,40));
     }
 
-    private void prepareStudy(int mode,java.util.function.Function<PersonalDatabase.Library,long[]> lookup,int emptyMessage) {
+    private void prepareQuiz(java.util.function.Function<PersonalDatabase.Library,List<PersonalDatabase.Exercise>> lookup) {
+        if (worker == null || preparingStudy || grading) return;
+        if (canResumeStudy() || (quiz()!=null && !quiz().saved())) { navigateStudy(Screen.STUDY); return; }
         Screen origin = screen();
         int originRequest = request;
         long originCollection = collection();
+        int limit = studyLimit();
         preparingStudy = true;
         worker.execute(() -> {
             try {
-                long[] queue = lookup.apply(personal.library());
+                var library = personal.library();
+                dictionary.load();
+                var quiz = QuizFactory.create(dictionary,lookup.apply(library),library.savedPage(40,0),
+                        limit,new java.util.Random());
                 main.post(() -> {
                     preparingStudy = false;
                     if (disposed || origin != screen() || request != originRequest || originCollection != collection()) return;
-                    if (queue.length == 0) {
-                        notice.setValue(emptyMessage);
-                        if (origin == Screen.ENTRY) navigateStudy(Screen.REVIEW);
-                        else refreshPersonal();
+                    if (quiz.finished()) {
+                        notice.setValue(R.string.quiz_none_available);
                         return;
                     }
-                    state.set("studyQueue",queue);
-                    state.set("studyPosition",0);
-                    state.set("studyMode",mode);
-                    state.set("reviewSessionCount",0);
-                    state.set("reviewSessionSuccess",0);
-                    state.set("reviewSessionFinished",false);
-                    state.remove("revealedCard");
-                    state.remove("revealedCardDue");
+                    state.set("quiz",quiz);
                     navigateStudy(Screen.STUDY);
                 });
             } catch (RuntimeException failure) {
@@ -308,16 +292,57 @@ public final class FoundationViewModel extends ViewModel {
         studyNavigation.setValue(true);
     }
 
-    private long[] studyQueue() {
-        long[] queue = state.get("studyQueue");
-        return queue == null ? EMPTY_QUEUE : queue;
+    QuizSession quiz() { return state.get("quiz"); }
+    boolean canResumeStudy() { var quiz = quiz(); return quiz != null && !quiz.finished(); }
+    boolean grading() { return grading; }
+    int studyLimit() { Integer value = state.get("quizLimit"); return value == null ? 20 : value; }
+    void setStudyLimit(int value) {
+        if (value != 10 && value != 20 && value != 30) throw new IllegalArgumentException("invalid quiz limit");
+        state.set("quizLimit",value);
+        if (preferences!=null) preferences.edit().putInt("quizLimit",value).apply();
+        refreshPersonal();
     }
 
-    int studyPosition() { return sessionCount("studyPosition"); }
-    int studyTotal() { return studyQueue().length; }
-    int studyMode() { return sessionCount("studyMode"); }
-    boolean canResumeStudy() { return studyPosition() < studyTotal(); }
-    boolean grading() { return grading; }
+    void answerQuiz(int choice) {
+        var quiz = quiz();
+        if (quiz != null && quiz.answer(choice,new java.util.Random())) state.set("quiz",quiz);
+    }
+
+    void advanceQuiz() {
+        var quiz = quiz();
+        if (quiz == null) return;
+        if (quiz.advance()) state.set("quiz",quiz);
+        finishQuiz();
+    }
+
+    private void finishQuiz() {
+        var quiz = quiz();
+        if (worker == null || quiz == null || !quiz.finished() || quiz.saved() || grading) return;
+        var grades = quiz.grades();
+        grading = true;
+        worker.execute(() -> {
+            try {
+                long now = System.currentTimeMillis();
+                personal.library().gradeQuiz(grades,now);
+                Long next = personal.library().learningCounts(now).nextDue;
+                main.post(() -> {
+                    grading = false;
+                    if (disposed || quiz != quiz()) return;
+                    quiz.markSaved(next);
+                    state.set("quiz",quiz);
+                    quizUpdated.setValue(true);
+                });
+            } catch (RuntimeException failure) {
+                main.post(() -> {
+                    grading = false;
+                    if (!disposed) {
+                        personalError.setValue(true);
+                        quizUpdated.setValue(true);
+                    }
+                });
+            }
+        });
+    }
 
     private PersonalDatabase.Saved savedItem(DictionaryRepository.Entry entry,DictionaryRepository.Sense sense) {
         var item = new PersonalDatabase.Saved();
@@ -432,44 +457,6 @@ public final class FoundationViewModel extends ViewModel {
         state.set("notesOnly",!notesOnly());
         changePersonalPage(0);
     }
-    boolean answerShown(PersonalDatabase.Exercise exercise) {
-        Long card = state.get("revealedCard");
-        Long due = state.get("revealedCardDue");
-        return card != null && card == exercise.id && due != null && due == exercise.due;
-    }
-
-    void revealAnswer(PersonalDatabase.Exercise exercise) {
-        state.set("revealedCard",exercise.id);
-        state.set("revealedCardDue",exercise.due);
-    }
-    void grade(PersonalDatabase.Exercise exercise,int rating) {
-        long[] queue = studyQueue();
-        int position = studyPosition();
-        if (worker == null || grading || screen() != Screen.STUDY
-                || position >= queue.length || queue[position] != exercise.id || !answerShown(exercise)) return;
-        grading = true;
-        worker.execute(() -> {
-            try {
-                boolean saved = personal.library().grade(exercise,rating,System.currentTimeMillis(),ReviewScheduler::basic);
-                main.post(() -> {
-                    grading = false;
-                    if (disposed) return;
-                    if (saved && queue == studyQueue()) {
-                        recordReviewEvent(rating);
-                        state.set("studyPosition",position+1);
-                    }
-                    refreshPersonal();
-                });
-            } catch (RuntimeException failure) {
-                main.post(() -> {
-                    grading = false;
-                    if (disposed) return;
-                    personalError.setValue(true);
-                    refreshPersonal();
-                });
-            }
-        });
-    }
 
     void deleteCollection(long id) {
         changePersonal(library -> {
@@ -480,19 +467,6 @@ public final class FoundationViewModel extends ViewModel {
         });
     }
 
-    void recordReviewEvent(int rating) {
-        boolean finished = Boolean.TRUE.equals(state.get("reviewSessionFinished"));
-        state.set("reviewSessionCount",(finished ? 0 : sessionReviewed())+1);
-        state.set("reviewSessionSuccess",(finished ? 0 : sessionSuccessful())+(rating > 0 ? 1 : 0));
-        state.set("reviewSessionFinished",false);
-    }
-
-    int sessionReviewed() { return sessionCount("reviewSessionCount"); }
-    int sessionSuccessful() { return sessionCount("reviewSessionSuccess"); }
-    private int sessionCount(String key) {
-        Integer count = state.get(key);
-        return count == null ? 0 : count;
-    }
 
     @Override protected void onCleared() {
         if (worker != null) {

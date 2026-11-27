@@ -6,6 +6,11 @@ import org.junit.Test;
 import static org.junit.Assert.*;
 
 public class ArticleDisplayTest {
+    @Test public void preservesForeignAccentsAndPersonalTextWhileDeduplicatingRussianMarks() {
+        assertEquals("лэптоп · ноутбук",TranslationDisplay.answer("лэпто́п · но́утбук · ноутбу́к",true,true));
+        assertEquals("ёлка, мой, café, café",TranslationDisplay.russian("ё́лка, мо́й, café, café"));
+        assertEquals("ноутбу́к",TranslationDisplay.answer("ноутбу́к",false,true));
+    }
     private static DictionaryRepository.Sense sense(String id,List<String> words) {
         return new DictionaryRepository.Sense(id,1,words,List.of(),"",List.of(),null);
     }

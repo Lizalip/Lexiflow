@@ -1,4 +1,6 @@
 <resources>
+    <color name="quiz_correct">#21653D</color>
+    <color name="quiz_wrong">#A42432</color>
     <color name="paper">#F7F8F4</color>
     <color name="ink">#17283D</color>
     <color name="mint">#C8F1E2</color>

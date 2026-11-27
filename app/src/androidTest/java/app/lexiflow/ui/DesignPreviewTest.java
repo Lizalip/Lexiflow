@@ -92,7 +92,7 @@ public class DesignPreviewTest {
             onView(withId(R.id.vocabulary)).perform(click());
             await(scenario,state -> state.screen() == Screen.VOCABULARY && state.savedCount() == 4,"preview library");
             capture(scenario,"04-vocabulary");
-            onView(withId(R.id.action)).perform(scrollTo(),click());
+            onView(withId(R.id.vocabulary_collections)).perform(click());
             await(scenario,state -> state.screen() == Screen.COLLECTIONS,"preview collections");
             onView(withText(COLLECTION)).perform(scrollTo(),click());
             await(scenario,state -> state.collection() != 0 && state.saved().size() == 4,"preview collection members");
@@ -102,9 +102,9 @@ public class DesignPreviewTest {
             onView(withId(R.id.review)).perform(click());
             await(scenario,state -> state.screen() == Screen.REVIEW && state.learning().unstudied > 0,"preview learning");
             onView(withText(startsWith("Учить новые слова"))).perform(scrollTo(),click());
-            await(scenario,state -> state.screen() == Screen.STUDY && state.exercise() != null,"preview card");
+            var quiz = RealResearchFlowTest.awaitQuiz(scenario,value -> value.question()!=null);
             capture(scenario,"06-review-front");
-            onView(withText(R.string.reveal)).perform(scrollTo(),click());
+            onView(withText(quiz.question().correct())).perform(scrollTo(),click());
             capture(scenario,"07-review-answer");
             onView(withContentDescription(R.string.back)).perform(click());
             onView(withId(R.id.progress)).perform(click());

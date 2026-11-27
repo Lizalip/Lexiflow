@@ -15,7 +15,25 @@ final class TranslationDisplay {
     private TranslationDisplay() {}
 
     static String answer(String text,boolean sourceAnswer,boolean research) {
-        return sourceAnswer && research ? wording(text) : text;
+        if (!sourceAnswer) return text;
+        var values = new LinkedHashSet<String>();
+        for (String part : text.split(" · ",-1)) values.add(russian(research ? wording(part) : part));
+        return String.join(" · ",values);
+    }
+
+    static String russian(String source) {
+        var display = new StringBuilder(source.length());
+        boolean cyrillic = false;
+        for (int i=0;i<source.length();) {
+            int code = source.codePointAt(i);
+            i += Character.charCount(code);
+            if (code == 0x301 && cyrillic) continue;
+            if (Character.getType(code) != Character.NON_SPACING_MARK) {
+                cyrillic = Character.UnicodeScript.of(code) == Character.UnicodeScript.CYRILLIC;
+            }
+            display.appendCodePoint(code);
+        }
+        return display.toString();
     }
 
     static String wording(String source) {
@@ -40,7 +58,7 @@ final class TranslationDisplay {
 
     static List<String> alternatives(List<String> source) {
         var unique = new LinkedHashSet<String>();
-        for (String text : source) unique.add(wording(text));
+        for (String text : source) unique.add(russian(wording(text)));
         return new ArrayList<>(unique);
     }
 }

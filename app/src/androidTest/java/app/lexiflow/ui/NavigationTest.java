@@ -120,7 +120,6 @@ public class NavigationTest {
             onView(withId(R.id.article_word)).check(matches(withText("zeta-demo")));
             onView(withText(R.string.article_more)).perform(scrollTo(),click());
             onView(withText(containsString("zeta-demos"))).check(matches(isDisplayed()));
-            onView(withText(android.R.string.ok)).perform(click());
             onView(withContentDescription(R.string.back)).perform(click());
             awaitDictionary(scenario);
             onView(withId(R.id.query)).check(matches(withText(draft)));
@@ -187,7 +186,7 @@ public class NavigationTest {
     @Test public void collectionsSurvivesRecreationAndReturnsToVocabulary() {
         try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
             onView(withId(R.id.vocabulary)).perform(click());
-            onView(withId(R.id.action)).perform(scrollTo(), click());
+            onView(withId(R.id.vocabulary_collections)).perform(click());
             scenario.recreate();
             onView(withId(R.id.title)).check(matches(withText(R.string.collections)));
             pressBack();

@@ -104,6 +104,9 @@ public abstract class PersonalDatabase extends RoomDatabase {
                 + "WHERE members.collectionId=:collection ORDER BY members.savedId DESC LIMIT :limit OFFSET :offset")
         public abstract List<Saved> collectionPage(long collection,int limit,int offset);
         @Query("SELECT count(*) FROM members WHERE collectionId=:collection") public abstract int collectionSize(long collection);
+        @Query("SELECT * FROM saved s WHERE NOT EXISTS (SELECT 1 FROM members m WHERE m.collectionId=:collection "
+                + "AND m.savedId=s.id) ORDER BY s.id DESC LIMIT :limit")
+        public abstract List<Saved> recentOutsideCollection(long collection,int limit);
         @Query("SELECT * FROM collections ORDER BY name,id") public abstract List<Collection> collections();
         @Query("SELECT * FROM members ORDER BY collectionId,savedId") public abstract List<Member> memberships();
         @Insert(onConflict = OnConflictStrategy.IGNORE) public abstract long save(Saved item);
@@ -159,6 +162,8 @@ public abstract class PersonalDatabase extends RoomDatabase {
         @Query("SELECT count(*) FROM cards WHERE savedId IS NOT NULL AND due<=:now") public abstract int dueCount(long now);
         @Query("SELECT count(*) FROM review_events") public abstract int reviewCount();
         @Query("SELECT count(*) FROM review_events WHERE rating>0") public abstract int successCount();
+        @Query("SELECT reviewedAt FROM review_events WHERE reviewedAt>=:start AND reviewedAt<:end")
+        public abstract List<Long> reviewTimes(long start,long end);
         @Query("UPDATE cards SET due=:next,intervalDays=:days WHERE id=:id AND due=:expected AND savedId IS NOT NULL")
         abstract int reschedule(long id,long expected,long next,int days);
 

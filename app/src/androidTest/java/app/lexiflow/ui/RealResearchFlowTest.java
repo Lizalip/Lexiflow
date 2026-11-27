@@ -79,12 +79,57 @@ public class RealResearchFlowTest {
             onView(withText(startsWith(rating+" · "))).perform(scrollTo(),click());
             await(scenario,state -> state.screen()==Screen.STUDY && state.exercise()==null,"real session finished");
             onView(withId(R.id.panel_title)).check(matches(withText(R.string.review_session_finished)));
+            capture(scenario,"10-session-summary");
             action(R.string.study_home);
             await(scenario,state -> state.screen()==Screen.REVIEW && state.learning().nextDue!=null,"next review scheduled");
+            capture(scenario,"11-learning");
             onView(withId(R.id.progress)).perform(click());
             await(scenario,state -> state.screen()==Screen.PROGRESS && state.reviewed()==1
-                    && state.successful()==1 && state.savedCount()==1,"real progress updated");
+                    && state.successful()==1 && state.savedCount()==1
+                    && state.activity().get(6).reviews()==1,"real progress updated");
             capture(scenario,"08-progress");
+            onView(withId(R.id.vocabulary)).perform(click());
+            await(scenario,state -> state.screen()==Screen.VOCABULARY && state.savedCount()==1,"saved meaning in vocabulary");
+            onView(withText(startsWith("book · "))).perform(scrollTo(),click());
+            onView(withText(target.getResources().getStringArray(R.array.saved_actions)[1])).perform(click());
+            onView(withHint(R.string.custom_translation)).perform(replaceText(CUSTOM));
+            onView(withHint(R.string.note)).perform(replaceText(NOTE),closeSoftKeyboard());
+            onView(withText(R.string.save)).perform(click());
+            await(scenario,state -> state.saved().stream().anyMatch(row -> NOTE.equals(row.note)),"demo note persisted");
+            capture(scenario,"04-vocabulary");
+            onView(withId(R.id.action)).perform(scrollTo(),click());
+            await(scenario,state -> state.screen()==Screen.COLLECTIONS,"collections opened");
+            action(R.string.create_collection);
+            onView(withHint(R.string.collection_name)).perform(replaceText(COLLECTION),closeSoftKeyboard());
+            onView(withText(R.string.save)).perform(click());
+            await(scenario,state -> state.collections().stream().anyMatch(row -> COLLECTION.equals(row.name)),"demo collection created");
+            onView(withText(COLLECTION)).perform(scrollTo(),click());
+            await(scenario,state -> state.collection()!=0 && !state.collectionCandidates().isEmpty(),"add from vocabulary available");
+            action(R.string.collection_add_saved);
+            onView(withText(startsWith("book · "+CUSTOM))).perform(click());
+            await(scenario,state -> state.collection()!=0 && state.saved().size()==1,"member added to demo collection");
+            capture(scenario,"05-collection");
+            onView(withId(R.id.settings)).perform(click());
+            awaitAvailable(scenario);
+            capture(scenario,"09-settings");
+            if ("true".equals(InstrumentationRegistry.getArguments().getString("lexiflowDemo"))) {
+                back();
+                back();
+                back();
+                onView(withId(R.id.search)).perform(click());
+                awaitAvailable(scenario);
+                query("kitchen");
+                awaitAvailable(scenario);
+                var kitchen = view(scenario).hits().stream()
+                        .filter(row -> "kitchen".equals(row.spelling()) && "n".equals(row.pos()) && row.translation()!=null)
+                        .findFirst().orElseThrow(AssertionError::new);
+                String kitchenLabel = "kitchen · n · " + target.getString(R.string.sense_title,kitchen.position())
+                        + "\n" + TranslationDisplay.wording(kitchen.translation());
+                onView(withText(kitchenLabel)).perform(scrollTo(),click());
+                awaitAvailable(scenario);
+                onView(withText(containsString("The kitchen is downstairs."))).perform(scrollTo()).check(matches(isDisplayed()));
+                capture(scenario,"12-attributed-example");
+            }
         }
     }
 

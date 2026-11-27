@@ -7,6 +7,19 @@ import org.junit.Test;
 import static org.junit.Assert.*;
 
 public class FoundationViewModelTest {
+    @Test public void activityAssignsReviewsToLocalDaysAcrossDaylightSavingTransition() {
+        var zone = java.time.ZoneId.of("Europe/Berlin");
+        var first = java.time.LocalDate.of(2026,10,23);
+        var before = first.plusDays(1).atTime(23,59).atZone(zone).toInstant().toEpochMilli();
+        var after = first.plusDays(2).atStartOfDay(zone).toInstant().toEpochMilli();
+        var last = first.plusDays(6).atTime(23,59).atZone(zone).toInstant().toEpochMilli();
+        var outside = first.plusDays(7).atStartOfDay(zone).toInstant().toEpochMilli();
+        var days = FoundationViewModel.activityDays(first,zone,java.util.List.of(before,after,after,last,outside));
+        assertEquals(7,days.size());
+        assertEquals(java.util.List.of(0,1,2,0,0,0,1),
+                days.stream().map(FoundationViewModel.ActivityDay::reviews).collect(java.util.stream.Collectors.toList()));
+    }
+
     @Test public void emptyInstallationStartsInDictionary() {
         FoundationViewModel model = new FoundationViewModel(new SavedStateHandle());
         assertEquals(Screen.SEARCH, model.screen());

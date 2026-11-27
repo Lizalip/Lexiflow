@@ -15,6 +15,9 @@ import app.lexiflow.R;
 import java.util.List;
 import java.util.Map;
 import java.util.Collections;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.function.Consumer;
@@ -41,7 +44,9 @@ public final class FoundationViewModel extends ViewModel {
                         boolean notesOnly,String savedQuery,boolean alphabetical,
                         List<PersonalDatabase.Saved> saved, Map<String,String> sourceLanguages, List<PersonalDatabase.Collection> collections,
                         PersonalDatabase.Exercise exercise,int cards,int due,int reviewed,int successful,
-                        PersonalDatabase.LearningCounts learning) {}
+                        PersonalDatabase.LearningCounts learning,List<ActivityDay> activity,
+                        List<PersonalDatabase.Saved> collectionCandidates) {}
+    record ActivityDay(LocalDate date,int reviews) {}
     final MutableLiveData<PersonalView> personalView = new MutableLiveData<>();
     final MutableLiveData<Boolean> personalError = new MutableLiveData<>();
     final MutableLiveData<Integer> notice = new MutableLiveData<>();
@@ -162,7 +167,10 @@ public final class FoundationViewModel extends ViewModel {
                         target == Screen.PROGRESS ? library.dueCount(now) : 0,
                         target == Screen.PROGRESS ? library.reviewCount() : 0,
                         target == Screen.PROGRESS ? library.successCount() : 0,
-                        target == Screen.REVIEW ? library.learningCounts(now) : null);
+                        target == Screen.REVIEW || target == Screen.PROGRESS ? library.learningCounts(now) : null,
+                        target == Screen.PROGRESS ? activity(library,now) : Collections.emptyList(),
+                        target == Screen.COLLECTIONS && collection != 0
+                                ? library.recentOutsideCollection(collection,PERSONAL_PAGE_SIZE) : Collections.emptyList());
                 main.post(() -> {
                     if (disposed || target != screen() || collection != collection()
                             || requestedPage != personalPage(target)
@@ -186,15 +194,37 @@ public final class FoundationViewModel extends ViewModel {
         });
     }
 
+    private static List<ActivityDay> activity(PersonalDatabase.Library library,long now) {
+        ZoneId zone = ZoneId.systemDefault();
+        LocalDate last = Instant.ofEpochMilli(now).atZone(zone).toLocalDate();
+        LocalDate first = last.minusDays(6);
+        long end = last.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli();
+        var times = library.reviewTimes(first.atStartOfDay(zone).toInstant().toEpochMilli(),end);
+        return activityDays(first,zone,times);
+    }
+
+    static List<ActivityDay> activityDays(LocalDate first,ZoneId zone,List<Long> timestamps) {
+        var counts = new int[7];
+        for (long timestamp : timestamps) {
+            long index = java.time.temporal.ChronoUnit.DAYS.between(first,Instant.ofEpochMilli(timestamp).atZone(zone).toLocalDate());
+            if (index >= 0 && index < counts.length) counts[(int)index]++;
+        }
+        var days = new java.util.ArrayList<ActivityDay>();
+        for (int i = 0; i < counts.length; i++) days.add(new ActivityDay(first.plusDays(i),counts[i]));
+        return days;
+    }
+
     void save(DictionaryRepository.Entry entry, DictionaryRepository.Sense sense) {
         var item = savedItem(entry,sense);
         changePersonal(library -> notifyResult(library.save(item) == -1 ? R.string.already_saved : R.string.saved_notice));
     }
 
     void learn(DictionaryRepository.Entry entry,DictionaryRepository.Sense sense) {
-        if (worker == null || preparingStudy || grading) return;
-        var item = savedItem(entry,sense);
-        if (item.answer.trim().isEmpty()) return;
+        learn(savedItem(entry,sense));
+    }
+
+    void learn(PersonalDatabase.Saved item) {
+        if (worker == null || preparingStudy || grading || (item.answer.trim().isEmpty() && item.custom.trim().isEmpty())) return;
         prepareStudy(STUDY_NEW,library -> {
             long now = System.currentTimeMillis();
             long card = library.learn(item,now);

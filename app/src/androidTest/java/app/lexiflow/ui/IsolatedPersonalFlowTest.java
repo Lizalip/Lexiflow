@@ -91,7 +91,8 @@ public class IsolatedPersonalFlowTest {
                     "collection created");
             onView(withText(collection)).perform(scrollTo(),click());
             await(scenario,state -> state.screen() == Screen.COLLECTIONS && state.collection() != 0,"collection opened");
-            action(R.string.rename_collection);
+            onView(withContentDescription(R.string.collection_actions)).perform(scrollTo(),click());
+            onView(withText(R.string.rename_collection)).perform(click());
             editCollection(renamed);
             await(scenario,state -> state.collections().stream().anyMatch(item -> item.name.equals(renamed)),
                     "collection renamed");
@@ -113,7 +114,7 @@ public class IsolatedPersonalFlowTest {
             back();
             onView(withId(R.id.review)).perform(click());
             await(scenario,state -> state.screen() == Screen.REVIEW && state.learning().unstudied == 1,"one value counted");
-            onView(withText(context.getString(R.string.study_new_count,1))).perform(scrollTo(),click());
+            action(R.string.study_new_mode);
             var first = RealResearchFlowTest.awaitQuiz(scenario,quiz -> quiz.question()!=null).question();
             assertEquals(custom,first.correct());
             capture(scenario,"06-review-front");
@@ -146,7 +147,8 @@ public class IsolatedPersonalFlowTest {
                     && state.collections().stream().anyMatch(item -> item.name.equals(renamed)), "collection survived reopen");
             onView(withText(renamed)).perform(scrollTo(),click());
             await(reopened,state -> state.collection() != 0 && state.saved().size() == 1,"membership survived reopen");
-            action(R.string.delete_collection);
+            onView(withContentDescription(R.string.collection_actions)).perform(scrollTo(),click());
+            onView(withText(R.string.delete_collection)).perform(click());
             onView(withText(R.string.remove)).perform(click());
             await(reopened,state -> state.screen() == Screen.COLLECTIONS && state.collection() == 0
                     && state.collections().isEmpty(),"collection deleted");

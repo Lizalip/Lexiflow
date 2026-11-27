@@ -84,8 +84,14 @@ public abstract class PersonalDatabase extends RoomDatabase {
     public static class LearningCounts {
         public int cards;
         public int unstudied;
+        public int studied;
         public int ready;
         public Long nextDue;
+    }
+
+    public static class CollectionCount {
+        public long collectionId;
+        public int words;
     }
 
     @Dao
@@ -110,6 +116,8 @@ public abstract class PersonalDatabase extends RoomDatabase {
                 + "AND m.savedId=s.id) ORDER BY s.id DESC LIMIT :limit")
         public abstract List<Saved> recentOutsideCollection(long collection,int limit);
         @Query("SELECT * FROM collections ORDER BY name,id") public abstract List<Collection> collections();
+        @Query("SELECT collectionId, count(*) AS words FROM members GROUP BY collectionId")
+        public abstract List<CollectionCount> collectionCounts();
         @Query("SELECT * FROM members ORDER BY collectionId,savedId") public abstract List<Member> memberships();
         @Insert(onConflict = OnConflictStrategy.IGNORE) public abstract long save(Saved item);
         @Query("UPDATE saved SET custom=:custom,note=:note WHERE id=:id") public abstract int edit(long id,String custom,String note);
@@ -144,11 +152,13 @@ public abstract class PersonalDatabase extends RoomDatabase {
         private static final String STUDIED = "EXISTS (SELECT 1 FROM review_events e WHERE e.cardId=c.id)";
         private static final String LEARNED = "EXISTS (SELECT 1 FROM cards old JOIN review_events e ON e.cardId=old.id"
                 + " WHERE old.savedId=s.id)";
-        @Query("SELECT count(*) AS cards, count(CASE WHEN NOT learned AND due<=:now THEN 1 END) AS unstudied,"
+        private static final String HAS_ANSWER = "(trim(s.custom)<>'' OR (s.custom='' AND trim(s.answer)<>''))";
+        @Query("SELECT count(*) AS cards, count(CASE WHEN NOT learned THEN 1 END) AS unstudied,"
+                + "count(CASE WHEN learned THEN 1 END) AS studied,"
                 + "count(CASE WHEN learned AND due<=:now THEN 1 END) AS ready,"
                 + "min(CASE WHEN due>:now THEN due END) AS nextDue FROM (SELECT s.id,min(c.due) AS due,"
-                + LEARNED+" AS learned FROM saved s JOIN cards c ON c.savedId=s.id"
-                + " WHERE s.custom<>'' OR s.answer<>'' GROUP BY s.id)")
+                + LEARNED+" AS learned FROM saved s LEFT JOIN cards c ON c.savedId=s.id"
+                + " WHERE "+HAS_ANSWER+" GROUP BY s.id)")
         public abstract LearningCounts learningCounts(long now);
 
         @Query("SELECT c.id FROM cards c WHERE c.savedId IS NOT NULL AND c.due<=:now "
@@ -163,13 +173,30 @@ public abstract class PersonalDatabase extends RoomDatabase {
         @Query(EXERCISE+"WHERE c.id=:id AND c.due<=:now")
         public abstract Exercise learningExercise(long id,long now);
 
-        @Query(EXERCISE+"WHERE c.due<=:now AND (s.custom<>'' OR s.answer<>'') "
-                +"AND c.id=(SELECT sibling.id FROM cards sibling WHERE sibling.savedId=s.id AND sibling.due<=:now "
+        @Query(EXERCISE+"WHERE c.id=:id")
+        public abstract Exercise quizExercise(long id);
+
+        private static final String COLLECTION_FILTER =
+                "(:collection=0 OR EXISTS (SELECT 1 FROM members m WHERE m.collectionId=:collection AND m.savedId=s.id))";
+
+        @Query("INSERT OR IGNORE INTO cards (savedId,reverse,due,intervalDays) "
+                +"SELECT s.id,0,:now,0 FROM saved s WHERE "+HAS_ANSWER+" AND "+COLLECTION_FILTER
+                +" AND NOT EXISTS (SELECT 1 FROM cards c WHERE c.savedId=s.id) ORDER BY s.id LIMIT :limit")
+        abstract void prepareMissingQuizCards(long now,long collection,int limit);
+
+        @Transaction
+        public List<Exercise> quizQueue(long now,int mode,long collection,int limit) {
+            if (mode == 0 || mode == 1) prepareMissingQuizCards(now,collection,limit);
+            return quizExercises(mode,collection,limit);
+        }
+
+        @Query(EXERCISE+"WHERE "+HAS_ANSWER+" "
+                +"AND c.id=(SELECT sibling.id FROM cards sibling WHERE sibling.savedId=s.id "
                 +"ORDER BY sibling.due,sibling.id LIMIT 1) "
                 +"AND (:mode=0 OR (:mode=1 AND NOT "+LEARNED+") OR (:mode=2 AND "+LEARNED+")) "
-                +"AND (:collection=0 OR EXISTS (SELECT 1 FROM members m WHERE m.collectionId=:collection AND m.savedId=s.id)) "
+                +"AND "+COLLECTION_FILTER+" "
                 +"ORDER BY c.due,c.id LIMIT :limit")
-        public abstract List<Exercise> quizQueue(long now,int mode,long collection,int limit);
+        abstract List<Exercise> quizExercises(int mode,long collection,int limit);
 
         @Query("SELECT c.id,s.id AS savedId,c.reverse,c.due,c.intervalDays,s.entryId,s.senseId,s.spelling, CASE WHEN s.custom='' THEN s.answer ELSE s.custom END AS answer, "
                 + "s.custom='' AS sourceAnswer "
@@ -189,13 +216,19 @@ public abstract class PersonalDatabase extends RoomDatabase {
 
         public record QuizGrade(long card,long saved,long expectedDue,int days,int rating) {}
 
-        @Transaction
         public void gradeQuiz(List<QuizGrade> grades,long now) {
+            gradeQuiz(grades,now,now);
+        }
+
+        @Transaction
+        public void gradeQuiz(List<QuizGrade> grades,long now,long startedAt) {
+            // A card studied early stays voluntary even if it comes due during the quiz.
+            long cutoff = Math.min(now,startedAt);
             for (var grade : grades) {
-                if (grade.expectedDue()>now) continue;
+                if (grade.expectedDue()>cutoff) continue;
                 var next = ReviewScheduler.basic(grade.days(),grade.rating(),now);
                 if (reschedule(grade.card(),grade.expectedDue(),next.due(),next.days()) != 1) continue;
-                alignDueCards(grade.saved(),grade.card(),now,next.due(),next.days());
+                alignDueCards(grade.saved(),grade.card(),cutoff,next.due(),next.days());
                 var event = new Event();
                 event.cardId = grade.card();
                 event.reviewedAt = now;

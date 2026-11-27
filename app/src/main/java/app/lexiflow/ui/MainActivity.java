@@ -162,8 +162,11 @@ public final class MainActivity extends AppCompatActivity {
             navigation.getMenu().findItem(id).setChecked(true);
         }
         ((TextView) findViewById(R.id.title)).setText(screen.title);
-        findViewById(R.id.title).setVisibility(screen == Screen.ENTRY || screen == Screen.STUDY ? View.GONE : View.VISIBLE);
-        findViewById(R.id.screen_panel).setVisibility(View.VISIBLE);
+        boolean showTitle = screen != Screen.ENTRY && screen != Screen.STUDY
+                && (screen != Screen.COLLECTIONS || model.collection()==0);
+        findViewById(R.id.title).setVisibility(showTitle ? View.VISIBLE : View.GONE);
+        findViewById(R.id.screen_panel).setVisibility(screen == Screen.COLLECTIONS || screen == Screen.STUDY
+                || screen == Screen.REVIEW ? View.GONE : View.VISIBLE);
         findViewById(R.id.research_banner).setVisibility(View.GONE);
         setTitle(screen == Screen.ENTRY ? R.string.app_name : screen.title);
         findViewById(R.id.pair).setVisibility(screen == Screen.SETTINGS ? View.VISIBLE : View.GONE);
@@ -546,30 +549,28 @@ public final class MainActivity extends AppCompatActivity {
                 } else addAction(rows,getString(R.string.study_find_word),() -> open(Screen.SEARCH));
                 addPageControls(rows,state);
                 for (var item : state.saved()) {
-                    boolean source = item.custom.isEmpty();
-                    String answer = source ? TranslationDisplay.answer(item.answer,true,
-                            LocalDictionaryRepository.isResearchProfile(this)).replace(" · ",", ") : item.custom;
-                    wordRow(rows,item.spelling,answer,state.sourceLanguages().get(item.entryId),() -> savedMenu(item,state))
+                    wordRow(rows,item.spelling,savedTranslation(item),state.sourceLanguages().get(item.entryId),() -> savedMenu(item,state))
                             .setTag(item.id);
                 }
             }
             case COLLECTIONS -> {
-                if (model.collection() == 0) {
+                findViewById(R.id.screen_panel).setVisibility(View.GONE);
+                boolean list = state.collection() == 0;
+                findViewById(R.id.title).setVisibility(list ? View.VISIBLE : View.GONE);
+                if (list) {
                     addAction(rows,getString(R.string.create_collection),() -> collectionName(null));
-                    if (!state.collections().isEmpty()) {
-                        heading.setText(R.string.collections);
-                        body.setText(getString(R.string.collection_count,state.collections().size()));
-                    }
                     for (var collection : state.collections()) {
-                        addOutlineAction(rows,collection.name,() -> { model.selectCollection(collection.id); renderPersonal(); });
+                        int count = state.collectionCounts().getOrDefault(collection.id,0);
+                        navigationRow(rows,R.drawable.ic_folder,collection.name,getString(R.string.collection_words,count),
+                                false,() -> { model.selectCollection(collection.id); renderPersonal(); });
                     }
                 } else {
                     for (var collection : state.collections()) {
-                        if (collection.id == model.collection()) renderCollection(rows,heading,body,collection,state);
+                        if (collection.id == state.collection()) renderCollection(rows,collection,state);
                     }
                 }
             }
-            case REVIEW -> renderLearning(rows,heading,body,state);
+            case REVIEW -> renderLearning(rows,state);
             case PROGRESS -> renderProgress(rows,heading,body,state);
             default -> { }
         }
@@ -606,6 +607,38 @@ public final class MainActivity extends AppCompatActivity {
         return row;
     }
 
+    private String savedTranslation(PersonalDatabase.Saved item) {
+        return item.custom.isEmpty() ? TranslationDisplay.answer(item.answer,true,
+                LocalDictionaryRepository.isResearchProfile(this)).replace(" · ",", ") : item.custom;
+    }
+
+    private void navigationRow(LinearLayout rows,int icon,CharSequence title,CharSequence detail,
+                               boolean primary,Runnable action) {
+        var row = (com.google.android.material.card.MaterialCardView)getLayoutInflater()
+                .inflate(R.layout.navigation_row,rows,false);
+        TextView titleView = row.findViewById(R.id.row_title);
+        TextView detailView = row.findViewById(R.id.row_detail);
+        android.widget.ImageView leading = row.findViewById(R.id.row_icon);
+        android.widget.ImageView chevron = row.findViewById(R.id.row_chevron);
+        titleView.setText(title);
+        detailView.setText(detail);
+        detailView.setVisibility(detail.length()==0 ? View.GONE : View.VISIBLE);
+        leading.setImageResource(icon);
+        chevron.setVisibility(action==null ? View.INVISIBLE : View.VISIBLE);
+        if (primary) {
+            row.setCardBackgroundColor(getColor(R.color.blue));
+            titleView.setTextColor(android.graphics.Color.WHITE);
+            detailView.setTextColor(android.graphics.Color.WHITE);
+            leading.setColorFilter(android.graphics.Color.WHITE);
+            chevron.setColorFilter(android.graphics.Color.WHITE);
+        }
+        if (action!=null) {
+            row.setOnClickListener(v -> action.run());
+            row.setFocusable(true);
+        }
+        rows.addView(row);
+    }
+
     private void renderProgress(LinearLayout rows,TextView heading,TextView body,FoundationViewModel.PersonalView state) {
         heading.setText(R.string.progress_library);
         body.setText(getString(R.string.progress_overview,state.savedCount(),state.cards(),state.reviewed()));
@@ -626,8 +659,7 @@ public final class MainActivity extends AppCompatActivity {
         }
         var plan = addBlock(rows,getString(R.string.progress_plan));
         addDetail(plan,getString(R.string.progress_ready,state.learning().ready));
-        if (state.learning().nextDue != null) addDetail(plan,nextStudyLabel(state.learning().nextDue));
-        addOutlineAction(plan,getString(R.string.study_home),() -> open(Screen.REVIEW));
+        addAction(plan,getString(R.string.study_home),() -> open(Screen.REVIEW));
     }
 
     private String savedLabel(PersonalDatabase.Saved item) {
@@ -728,34 +760,75 @@ public final class MainActivity extends AppCompatActivity {
         dialog.show();
     }
 
-    private void renderCollection(LinearLayout rows,TextView heading,TextView body,
-                                  PersonalDatabase.Collection collection,FoundationViewModel.PersonalView state) {
-        heading.setText(collection.name);
-        body.setText(state.rowCount() == 0 ? getString(R.string.collection_empty)
-                : getString(R.string.saved_count,state.rowCount()));
-        if (state.rowCount() > 0) {
-            addAction(rows,getString(R.string.study_collection),() ->
+    private void renderCollection(LinearLayout rows,PersonalDatabase.Collection collection,
+                                  FoundationViewModel.PersonalView state) {
+        View management = getLayoutInflater().inflate(R.layout.content_block,rows,false);
+        rows.addView(management);
+        LinearLayout controls = management.findViewById(R.id.block_items);
+        var header = new LinearLayout(this);
+        header.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        var title = new TextView(this);
+        title.setTextAppearance(R.style.PageHeading);
+        title.setAccessibilityHeading(true);
+        title.setText(collection.name);
+        header.addView(title,new LinearLayout.LayoutParams(0,android.view.ViewGroup.LayoutParams.WRAP_CONTENT,1));
+        menuIcon(header,getString(R.string.collection_actions),anchor -> collectionMenu(anchor,collection));
+        controls.addView(header);
+        addDetail(controls,getString(R.string.collection_words,state.rowCount()));
+        Runnable addWords = () -> {
+            if (state.collectionCandidates().isEmpty()) open(Screen.SEARCH);
+            else addFromSaved(collection,state.collectionCandidates());
+        };
+        if (state.rowCount()==0) {
+            addDetail(controls,getString(R.string.collection_empty));
+            addAction(controls,getString(R.string.collection_add_saved),addWords);
+        } else {
+            addAction(controls,getString(R.string.study_collection),() ->
                     model.startStudy(FoundationViewModel.STUDY_ALL,collection.id));
+            addOutlineAction(controls,getString(R.string.collection_add_saved),addWords);
         }
-        if (!state.collectionCandidates().isEmpty()) {
-            addOutlineAction(rows,getString(R.string.collection_add_saved),() -> addFromSaved(collection,state.collectionCandidates()));
-        } else if (state.rowCount() == 0) {
-            addOutlineAction(rows,getString(R.string.study_find_word),() -> open(Screen.SEARCH));
-        }
-        addOutlineAction(rows,getString(R.string.rename_collection),() -> collectionName(collection));
-        addOutlineAction(rows,getString(R.string.delete_collection),() -> new MaterialAlertDialogBuilder(this)
-                .setTitle(R.string.confirm_delete_collection)
-                .setMessage(R.string.delete_collection_message)
-                .setNegativeButton(android.R.string.cancel,null)
-                .setPositiveButton(R.string.remove,(dialog,which) -> model.deleteCollection(collection.id)).show());
         addPageControls(rows,state);
         for (var item : state.saved()) {
-            addOutlineAction(rows,savedLabel(item),() -> new MaterialAlertDialogBuilder(this).setTitle(item.spelling)
-                    .setNegativeButton(android.R.string.cancel,null)
-                    .setPositiveButton(R.string.open_saved,(d,w) -> openSavedFromList(item))
-                    .setNeutralButton(R.string.remove_from_collection,(d,w) ->
-                            model.changePersonal(library -> library.removeMember(collection.id,item.id))).show());
+            View card = wordRow(rows,item.spelling,savedTranslation(item),state.sourceLanguages().get(item.entryId),
+                    () -> openSavedFromList(item));
+            card.setTag(item.id);
+            menuIcon(card.findViewById(R.id.result_line),getString(R.string.collection_word_actions,item.spelling),anchor -> {
+                var menu = new androidx.appcompat.widget.PopupMenu(this,anchor);
+                menu.getMenu().add(R.string.collection_edit_word).setOnMenuItemClickListener(option -> {
+                    editSaved(item);
+                    return true;
+                });
+                menu.getMenu().add(R.string.remove_from_collection).setOnMenuItemClickListener(option -> {
+                    model.changePersonal(library -> library.removeMember(collection.id,item.id));
+                    return true;
+                });
+                menu.show();
+            });
         }
+    }
+
+    private void menuIcon(LinearLayout row,String label,java.util.function.Consumer<View> openMenu) {
+        var button = (android.widget.ImageButton)getLayoutInflater().inflate(R.layout.icon_action,row,false);
+        button.setImageResource(R.drawable.ic_more);
+        button.setContentDescription(label);
+        button.setOnClickListener(openMenu::accept);
+        row.addView(button);
+    }
+
+    private void collectionMenu(View anchor,PersonalDatabase.Collection collection) {
+        var menu = new androidx.appcompat.widget.PopupMenu(this,anchor);
+        menu.getMenu().add(R.string.rename_collection).setOnMenuItemClickListener(option -> {
+            collectionName(collection);
+            return true;
+        });
+        menu.getMenu().add(R.string.delete_collection).setOnMenuItemClickListener(option -> {
+            new MaterialAlertDialogBuilder(this).setTitle(R.string.confirm_delete_collection)
+                    .setMessage(R.string.delete_collection_message)
+                    .setNegativeButton(android.R.string.cancel,null)
+                    .setPositiveButton(R.string.remove,(dialog,which) -> model.deleteCollection(collection.id)).show();
+            return true;
+        });
+        menu.show();
     }
 
     private void addFromSaved(PersonalDatabase.Collection collection,java.util.List<PersonalDatabase.Saved> candidates) {
@@ -800,41 +873,53 @@ public final class MainActivity extends AppCompatActivity {
         model.changePersonal(library -> library.addCard(card));
     }
 
-    private void renderLearning(LinearLayout rows,TextView heading,TextView body,FoundationViewModel.PersonalView state) {
+    private void renderLearning(LinearLayout rows,FoundationViewModel.PersonalView state) {
         var learning = state.learning();
-        findViewById(R.id.screen_panel).setVisibility(View.GONE);
-        if (model.canResumeStudy()) addAction(rows,getString(R.string.study_resume),() -> open(Screen.STUDY));
-        if (learning.nextDue != null) addDetail(rows,nextStudyLabel(learning.nextDue));
-        if (learning.ready > 0) {
-            addAction(rows,getString(R.string.study_due_count,learning.ready),() -> model.startStudy(FoundationViewModel.STUDY_DUE,0));
-        } else addDetail(rows,getString(R.string.quiz_no_due));
-        if (learning.unstudied > 0) {
-            if (learning.ready == 0) addAction(rows,getString(R.string.study_new_count,learning.unstudied),
-                    () -> model.startStudy(FoundationViewModel.STUDY_NEW,0));
-            else addOutlineAction(rows,getString(R.string.study_new_count,learning.unstudied),
-                    () -> model.startStudy(FoundationViewModel.STUDY_NEW,0));
-        } else addDetail(rows,getString(R.string.quiz_no_new));
-        addOutlineAction(rows,getString(R.string.study_by_collection),() -> open(Screen.COLLECTIONS));
+        boolean resume = model.canResumeStudy();
+        if (resume) addAction(rows,getString(R.string.study_resume),() -> open(Screen.STUDY));
+        if (learning.ready == 0 && learning.unstudied > 0) {
+            newWordsRow(rows,learning.unstudied,!resume);
+            reviewWordsRow(rows,learning,false);
+        } else {
+            reviewWordsRow(rows,learning,!resume && learning.studied>0);
+            newWordsRow(rows,learning.unstudied,false);
+        }
+        navigationRow(rows,R.drawable.ic_folder,getString(R.string.study_by_collection),"",false,
+                () -> open(Screen.COLLECTIONS));
         if (learning.cards == 0) {
             addTextAction(rows,state.savedCount()==0 ? R.string.study_find_word : R.string.study_open_saved,
                     () -> open(state.savedCount()==0 ? Screen.SEARCH : Screen.VOCABULARY));
         }
-        addAction(rows,R.layout.text_action_row,getString(R.string.quiz_length,model.studyLimit()),() -> {
-            int[] lengths = {10,20,30};
-            String[] labels = java.util.Arrays.stream(lengths).mapToObj(value -> getString(R.string.quiz_length,value))
-                    .toArray(String[]::new);
-            new MaterialAlertDialogBuilder(this).setTitle(R.string.quiz_select_length)
-                    .setSingleChoiceItems(labels,(model.studyLimit()-10)/10,(dialog,index) -> {
-                        model.setStudyLimit(lengths[index]);
-                        dialog.dismiss();
-                    }).setNegativeButton(android.R.string.cancel,null).show();
-        });
+        navigationRow(rows,R.drawable.ic_settings,getString(R.string.quiz_select_length),
+                getString(R.string.quiz_length,model.studyLimit()),false,this::chooseStudyLength);
     }
 
-    private String nextStudyLabel(long due) {
-        String date = java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.MEDIUM,
-                java.text.DateFormat.SHORT).format(new java.util.Date(due));
-        return getString(R.string.study_next_date,date);
+    private void newWordsRow(LinearLayout rows,int count,boolean primary) {
+        navigationRow(rows,R.drawable.ic_vocabulary,getString(R.string.study_new_mode),studyAvailability(count),
+                primary,count==0 ? null : () -> model.startStudy(FoundationViewModel.STUDY_NEW,0));
+    }
+
+    private void reviewWordsRow(LinearLayout rows,PersonalDatabase.LearningCounts learning,boolean primary) {
+        String caption = getString(R.string.study_no_learned);
+        if (learning.studied > 0) caption = learning.ready == 0
+                ? getString(R.string.study_review_early) : getString(R.string.progress_ready,learning.ready);
+        navigationRow(rows,R.drawable.ic_review,getString(R.string.study_review_mode),caption,
+                primary,learning.studied==0 ? null : () -> model.startStudy(FoundationViewModel.STUDY_DUE,0));
+    }
+
+    private String studyAvailability(int count) {
+        return count==0 ? getString(R.string.study_no_words) : getString(R.string.collection_words,count);
+    }
+
+    private void chooseStudyLength() {
+        int[] lengths = {10,20,30};
+        String[] labels = java.util.Arrays.stream(lengths).mapToObj(value -> getString(R.string.quiz_length,value))
+                .toArray(String[]::new);
+        new MaterialAlertDialogBuilder(this).setTitle(R.string.quiz_select_length)
+                .setSingleChoiceItems(labels,(model.studyLimit()-10)/10,(dialog,index) -> {
+                    model.setStudyLimit(lengths[index]);
+                    dialog.dismiss();
+                }).setNegativeButton(android.R.string.cancel,null).show();
     }
 
     private void renderQuiz(LinearLayout rows) {
@@ -845,27 +930,28 @@ public final class MainActivity extends AppCompatActivity {
             return;
         }
         if (quiz.finished()) {
-            addSectionHeading(rows,getString(R.string.review_session_finished));
-            int count = quiz.answered();
-            addDetail(rows,getString(R.string.quiz_summary,count,quiz.uniqueWords(),quiz.correct(),
-                    count-quiz.correct(),count==0 ? 0 : quiz.correct()*100/count));
-            if (quiz.nextDue()!=null) addDetail(rows,nextStudyLabel(quiz.nextDue()));
+            View summary = getLayoutInflater().inflate(R.layout.quiz_summary,rows,false);
+            ((TextView)summary.findViewById(R.id.summary_tasks)).setText(String.valueOf(quiz.answered()));
+            ((TextView)summary.findViewById(R.id.summary_words)).setText(String.valueOf(quiz.uniqueWords()));
+            rows.addView(summary);
             if (quiz.saved()) {
-                addAction(rows,getString(R.string.study_home),() -> open(Screen.REVIEW));
-                addTextAction(rows,R.string.open_progress,() -> open(Screen.PROGRESS));
+                addAction(rows,getString(R.string.open_progress),() -> open(Screen.PROGRESS));
+                addOutlineAction(rows,getString(R.string.study_home),() -> open(Screen.REVIEW));
             } else if (model.grading()) addDetail(rows,getString(R.string.quiz_saving));
             else addAction(rows,getString(R.string.quiz_retry_save),() -> { model.advanceQuiz(); renderPersonal(); });
             return;
         }
         var question = quiz.question();
-        addDetail(rows,getString(R.string.study_position,quiz.position()+1,quiz.total()));
+        addSectionHeading(rows,getString(R.string.review));
+        addDetail(rows,getString(R.string.quiz_position,quiz.position()+1,quiz.total()));
         var progress = (com.google.android.material.progressindicator.LinearProgressIndicator)getLayoutInflater()
                 .inflate(R.layout.activity_day,rows,false);
         progress.setMax(quiz.total());
         progress.setProgress(quiz.position()+1);
         rows.addView(progress);
         boolean englishFirst = "en".equals(question.word().language()) != question.reverse();
-        addDetail(rows,getString(englishFirst ? R.string.forward_search : R.string.reverse_search));
+        addDetail(rows,getString(R.string.quiz_instruction,
+                getString(englishFirst ? R.string.forward_search : R.string.reverse_search)));
         var prompt = inflateArticleDetail(rows);
         prompt.setTextAppearance(R.style.PageHeading);
         prompt.setText(question.prompt());
@@ -877,18 +963,24 @@ public final class MainActivity extends AppCompatActivity {
             int index = i;
             String option = question.options().get(i);
             boolean correct = question.correct().equals(option);
-            CharSequence label = !answered ? option : correct ? getString(R.string.quiz_correct_option,option)
-                    : i==quiz.selected() ? getString(R.string.quiz_wrong_option,option) : option;
-            var button = addOutlineAction(rows,label,() -> {
+            var button = addAction(rows,R.layout.quiz_option,option,() -> {
                 model.answerQuiz(index);
                 renderPersonal();
             });
             if (answered) {
+                button.setOnClickListener(null);
                 button.setClickable(false);
                 if (correct || i==quiz.selected()) {
-                    int color = getColor(correct ? R.color.quiz_correct : R.color.quiz_wrong);
-                    button.setTextColor(color);
-                    button.setStrokeColor(android.content.res.ColorStateList.valueOf(color));
+                    var color = android.content.res.ColorStateList.valueOf(
+                            getColor(correct ? R.color.quiz_correct : R.color.quiz_wrong));
+                    int accent = getColor(correct ? R.color.mint : R.color.coral);
+                    button.setBackgroundTintList(android.content.res.ColorStateList.valueOf(
+                            androidx.core.graphics.ColorUtils.blendARGB(getColor(R.color.paper),accent,0.3f)));
+                    button.setIconResource(correct ? R.drawable.ic_check : R.drawable.ic_wrong);
+                    button.setIconTint(color);
+                    button.setStrokeColor(color);
+                    button.setContentDescription(getString(correct ? R.string.quiz_correct_option
+                            : R.string.quiz_wrong_option,option));
                 }
             }
         }

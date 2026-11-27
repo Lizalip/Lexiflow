@@ -49,7 +49,7 @@ public final class FoundationViewModel extends ViewModel {
                         List<PersonalDatabase.Saved> saved, Map<String,String> sourceLanguages, List<PersonalDatabase.Collection> collections,
                         int cards,int due,int reviewed,int successful,
                         PersonalDatabase.LearningCounts learning,List<ActivityDay> activity,
-                        List<PersonalDatabase.Saved> collectionCandidates) {}
+                        List<PersonalDatabase.Saved> collectionCandidates,Map<Long,Integer> collectionCounts) {}
     record ActivityDay(LocalDate date,int reviews) {}
     final MutableLiveData<PersonalView> personalView = new MutableLiveData<>();
     final MutableLiveData<Boolean> personalError = new MutableLiveData<>();
@@ -173,7 +173,8 @@ public final class FoundationViewModel extends ViewModel {
                         target == Screen.REVIEW || target == Screen.PROGRESS ? library.learningCounts(now) : null,
                         target == Screen.PROGRESS ? activity(library,now) : Collections.emptyList(),
                         target == Screen.COLLECTIONS && collection != 0
-                                ? library.recentOutsideCollection(collection,PERSONAL_PAGE_SIZE) : Collections.emptyList());
+                                ? library.recentOutsideCollection(collection,PERSONAL_PAGE_SIZE) : Collections.emptyList(),
+                        target == Screen.COLLECTIONS && collection == 0 ? collectionCounts(library) : Collections.emptyMap());
                 main.post(() -> {
                     if (disposed || target != screen() || collection != collection()
                             || requestedPage != personalPage(target)
@@ -188,6 +189,12 @@ public final class FoundationViewModel extends ViewModel {
                 main.post(() -> { if (!disposed) personalError.setValue(true); });
             }
         });
+    }
+
+    private static Map<Long,Integer> collectionCounts(PersonalDatabase.Library library) {
+        var counts = new java.util.HashMap<Long,Integer>();
+        for (var row : library.collectionCounts()) counts.put(row.collectionId,row.words);
+        return counts;
     }
 
     private static List<ActivityDay> activity(PersonalDatabase.Library library,long now) {
@@ -242,19 +249,18 @@ public final class FoundationViewModel extends ViewModel {
 
     void learn(PersonalDatabase.Saved item) {
         if (item.answer.trim().isEmpty() && item.custom.trim().isEmpty()) return;
-        prepareQuiz(library -> {
-            long now = System.currentTimeMillis();
+        prepareQuiz((library,now) -> {
             long id = library.learn(item,now);
-            var exercise = library.learningExercise(id,now);
+            var exercise = library.quizExercise(id);
             return exercise == null ? Collections.emptyList() : Collections.singletonList(exercise);
         });
     }
 
     void startStudy(int mode,long collection) {
-        prepareQuiz(library -> library.quizQueue(System.currentTimeMillis(),mode,collection,40));
+        prepareQuiz((library,now) -> library.quizQueue(now,mode,collection,40));
     }
 
-    private void prepareQuiz(java.util.function.Function<PersonalDatabase.Library,List<PersonalDatabase.Exercise>> lookup) {
+    private void prepareQuiz(java.util.function.BiFunction<PersonalDatabase.Library,Long,List<PersonalDatabase.Exercise>> lookup) {
         if (worker == null || preparingStudy || grading) return;
         if (canResumeStudy() || (quiz()!=null && !quiz().saved())) { navigateStudy(Screen.STUDY); return; }
         Screen origin = screen();
@@ -266,7 +272,8 @@ public final class FoundationViewModel extends ViewModel {
             try {
                 var library = personal.library();
                 dictionary.load();
-                var quiz = QuizFactory.create(dictionary,lookup.apply(library),library.savedPage(40,0),
+                long startedAt = System.currentTimeMillis();
+                var quiz = QuizFactory.create(dictionary,lookup.apply(library,startedAt),library.savedPage(40,0),
                         limit,new java.util.Random());
                 main.post(() -> {
                     preparingStudy = false;
@@ -275,6 +282,7 @@ public final class FoundationViewModel extends ViewModel {
                         notice.setValue(R.string.quiz_none_available);
                         return;
                     }
+                    state.set("quizStartedAt",startedAt);
                     state.set("quiz",quiz);
                     navigateStudy(Screen.STUDY);
                 });
@@ -319,11 +327,12 @@ public final class FoundationViewModel extends ViewModel {
         var quiz = quiz();
         if (worker == null || quiz == null || !quiz.finished() || quiz.saved() || grading) return;
         var grades = quiz.grades();
+        Long startedAt = state.get("quizStartedAt");
         grading = true;
         worker.execute(() -> {
             try {
                 long now = System.currentTimeMillis();
-                personal.library().gradeQuiz(grades,now);
+                personal.library().gradeQuiz(grades,now,startedAt == null ? now : startedAt);
                 Long next = personal.library().learningCounts(now).nextDue;
                 main.post(() -> {
                     grading = false;

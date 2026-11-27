@@ -45,6 +45,64 @@ public class PersonalSearchTest {
         }
     }
 
+    @Test public void voluntaryPracticeKeepsScheduleAndReviewHistory() {
+        var context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        var personal = Room.inMemoryDatabaseBuilder(context,PersonalDatabase.class).build();
+        try {
+            var library = personal.library();
+            long now = 10_000;
+            long saved = save(library,"book","книга","");
+            long outside = save(library,"house","дом","");
+            var collection = new PersonalDatabase.Collection();
+            collection.name = "Study";
+            long collectionId = library.create(collection);
+            var member = new PersonalDatabase.Member();
+            member.collectionId = collectionId;
+            member.savedId = saved;
+            library.addMember(member);
+            assertEquals(0,library.cardCount());
+            var initial = library.quizQueue(now,FoundationViewModel.STUDY_ALL,collectionId,10);
+            assertEquals(1,initial.size());
+            var word = initial.get(0);
+            assertEquals(saved,word.savedId);
+            assertEquals(1,library.cardCount());
+            library.gradeQuiz(List.of(grade(word,2)),now,now);
+
+            long early = now+1;
+            var repeat = library.quizQueue(early,FoundationViewModel.STUDY_ALL,collectionId,10);
+            assertEquals(1,repeat.size());
+            var scheduled = repeat.get(0);
+            assertEquals(word.id,scheduled.id);
+            assertTrue(scheduled.due>early);
+            assertEquals(2,scheduled.intervalDays);
+            var counts = library.learningCounts(early);
+            assertEquals(1,counts.studied);
+            assertEquals(0,counts.ready);
+            assertEquals(1,counts.unstudied);
+            var review = library.quizQueue(early,FoundationViewModel.STUDY_DUE,0,10);
+            assertEquals(1,review.size());
+            assertEquals(saved,review.get(0).savedId);
+            assertEquals(outside,library.quizQueue(early,FoundationViewModel.STUDY_NEW,0,10).get(0).savedId);
+
+            // Completion just after the scheduled time must still count as voluntary.
+            library.gradeQuiz(List.of(grade(scheduled,0)),scheduled.due+1,early);
+            var preserved = library.quizQueue(early,FoundationViewModel.STUDY_ALL,collectionId,10).get(0);
+            assertEquals(scheduled.id,preserved.id);
+            assertEquals(scheduled.intervalDays,preserved.intervalDays);
+            assertEquals(scheduled.due,preserved.due);
+            assertEquals(2,library.cardCount());
+            assertEquals(1,library.reviewCount());
+            assertEquals(1,library.successCount());
+            assertEquals(1,library.learningCounts(scheduled.due).ready);
+        } finally {
+            personal.close();
+        }
+    }
+
+    private static PersonalDatabase.Library.QuizGrade grade(PersonalDatabase.Exercise exercise,int rating) {
+        return new PersonalDatabase.Library.QuizGrade(exercise.id,exercise.savedId,exercise.due,exercise.intervalDays,rating);
+    }
+
     @Test public void learningReusesSavedSenseAndSeparatesNewCardsFromScheduledReviews() {
         var context = InstrumentationRegistry.getInstrumentation().getTargetContext();
         var personal = Room.inMemoryDatabaseBuilder(context,PersonalDatabase.class).build();

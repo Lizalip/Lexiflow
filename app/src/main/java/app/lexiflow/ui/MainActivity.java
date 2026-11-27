@@ -238,6 +238,8 @@ public final class MainActivity extends AppCompatActivity {
                 int dictionaryLabel = state.synthetic() ? R.string.dictionary_synthetic : R.string.pair;
                 if (!empty && state.hits().isEmpty()) {
                     body.setText(getString(R.string.dictionary_no_hits_help,getString(dictionaryLabel)));
+                    addOutlineAction(rows,getString(R.string.try_other_direction),model::toggleDirection);
+                    addOutlineAction(rows,getString(R.string.clear_search),() -> query.setText(""));
                 } else body.setText(dictionaryLabel);
                 for (var hit : state.hits()) {
                     String label = hit.spelling() + (hit.pos() == null ? "" : " · " + hit.pos())
@@ -248,7 +250,7 @@ public final class MainActivity extends AppCompatActivity {
                     if ("ru".equals(hit.language())) label += "\n" + getString(R.string.direct_russian_article);
                     if (hit.accentMatch()) label += "\n" + getString(R.string.accent_search_match);
                     if (hit.matchedForm() != null) label += "\n" + getString(R.string.matched_form,hit.matchedForm());
-                    addAction(rows, label, () -> {
+                    addOutlineAction(rows, label, () -> {
                         rememberSearchPosition();
                         getSystemService(InputMethodManager.class).hideSoftInputFromWindow(query.getWindowToken(), 0);
                         query.clearFocus();
@@ -289,7 +291,7 @@ public final class MainActivity extends AppCompatActivity {
             pronunciation = new OfflinePronunciation(this,this::updatePronunciationButton);
         }
         if ("en".equals(entry.language())) {
-            pronunciationButton = addAction(rows,getString(R.string.pronounce_offline),() -> {
+            pronunciationButton = addOutlineAction(rows,getString(R.string.pronounce_offline),() -> {
                 if (!pronunciation.speak(entry.spelling())) {
                     Toast.makeText(this,R.string.pronunciation_error,Toast.LENGTH_SHORT).show();
                 }
@@ -300,37 +302,31 @@ public final class MainActivity extends AppCompatActivity {
             if (pronunciation != null) pronunciation.stop();
             body.setText(getString(R.string.direct_russian_part_of_speech,entry.pos()));
         }
-        addAction(rows,getString(R.string.save_entry),() -> model.save(entry,null));
         boolean research = LocalDictionaryRepository.isResearchProfile(this);
-        if (!research) addMetadata(rows,entry.metadata(),false);
-        else addMetadata(rows,entry.metadata().stream().filter(MainActivity::primaryArticleMetadata)
-                .collect(java.util.stream.Collectors.toList()),false);
-        if (!entry.forms().isEmpty()) {
-            TextView forms = (TextView)getLayoutInflater().inflate(R.layout.entry_forms,rows,false);
-            var text = new StringBuilder(getString(R.string.word_forms));
-            for (var form : entry.forms()) {
-                text.append("\n").append(form.spelling());
-                if (form.grammar()!=null) text.append(" · ").append(localGrammar(form.grammar()));
-                text.append("\n").append(form.attribution());
-            }
-            forms.setText(text);
-            rows.addView(forms);
+        var ready = entry.senses().stream().filter(MainActivity::hasStudyAnswer)
+                .collect(java.util.stream.Collectors.toList());
+        var primary = ready.stream().filter(sense -> sense.id().equals(model.selectedSense())).findFirst()
+                .orElse(ready.isEmpty() ? null : ready.get(0));
+        if (primary != null) {
+            String first = primary.translations().stream().filter(word -> !word.trim().isEmpty())
+                    .findFirst().orElseThrow();
+            body.append("\n" + (research ? TranslationDisplay.wording(first) : first));
+            addAction(rows,getString(R.string.study_add_sense,primary.position()),() -> model.learn(entry,primary));
         }
+        addMetadata(rows,entry.metadata().stream().filter(MainActivity::primaryArticleMetadata)
+                .collect(java.util.stream.Collectors.toList()),false);
+        addOutlineAction(rows,getString(R.string.save_entry),() -> model.save(entry,null));
+        if (!entry.senses().isEmpty()) addSectionHeading(rows,getString(R.string.article_meanings));
         for (var sense : entry.senses()) {
-            TextView details = inflateArticleDetail(rows);
             StringBuilder text = new StringBuilder(getString(R.string.sense_title, sense.position()));
             if (sense.id().equals(model.selectedSense())) text.append(" · ").append(getString(R.string.selected_sense));
+            addSectionHeading(rows,text);
+            text.setLength(0);
             for (String word : research ? TranslationDisplay.alternatives(sense.translations()) : sense.translations()) {
-                text.append("\n").append(word);
+                if (text.length() > 0) text.append("\n");
+                text.append(word);
             }
-            for (var example : sense.examples()) {
-                text.append("\n\n").append(example.body());
-                if (example.translation() != null) text.append("\n").append(example.translation());
-                text.append("\n").append(example.attribution());
-            }
-            text.append("\n\n").append(sense.attribution()).append("\n");
-            details.setText(text);
-            rows.addView(details);
+            if (text.length() > 0) addDetail(rows,text);
             addMetadata(rows,sense.metadata(),false);
             if (sense.context() != null) {
                 TextView context = inflateArticleDetail(rows);
@@ -338,16 +334,46 @@ public final class MainActivity extends AppCompatActivity {
                         sense.context().text(),sense.context().attribution()));
                 rows.addView(context);
             }
-            if (sense.translations().stream().anyMatch(word -> !word.trim().isEmpty())) {
-                addAction(rows,getString(R.string.study_add_sense,sense.position()),() -> model.learn(entry,sense));
+            if (!sense.examples().isEmpty()) {
+                addSectionHeading(rows,getString(R.string.article_sense_examples));
+                for (var example : sense.examples()) {
+                    var exampleText = new StringBuilder(example.body());
+                    if (example.translation() != null) exampleText.append("\n").append(example.translation());
+                    exampleText.append("\n").append(example.attribution());
+                    addDetail(rows,exampleText);
+                }
             }
-            addAction(rows,getString(R.string.save_sense,sense.position()),() -> model.save(entry,sense));
+            addDetail(rows,sense.attribution());
+            if (sense != primary && hasStudyAnswer(sense)) {
+                addOutlineAction(rows,getString(R.string.study_add_sense,sense.position()),() -> model.learn(entry,sense));
+            }
+            addOutlineAction(rows,getString(R.string.save_sense,sense.position()),() -> model.save(entry,sense));
         }
-        if (research) addMetadata(rows,entry.metadata().stream().filter(value -> !primaryArticleMetadata(value))
-                .collect(java.util.stream.Collectors.toList()),true);
-        TextView credit = inflateArticleDetail(rows);
-        credit.setText(entry.attribution());
-        rows.addView(credit);
+        if (!entry.forms().isEmpty()) {
+            addSectionHeading(rows,getString(R.string.word_forms));
+            TextView forms = (TextView)getLayoutInflater().inflate(R.layout.entry_forms,rows,false);
+            var text = new StringBuilder();
+            for (var form : entry.forms()) {
+                if (text.length() > 0) text.append("\n\n");
+                text.append(form.spelling());
+                if (form.grammar()!=null) text.append(" · ").append(localGrammar(form.grammar()));
+                text.append("\n").append(form.attribution());
+            }
+            forms.setText(text);
+            rows.addView(forms);
+        }
+        var notes = entry.metadata().stream().filter(value -> !primaryArticleMetadata(value))
+                .collect(java.util.stream.Collectors.toList());
+        if (!notes.isEmpty()) {
+            addSectionHeading(rows,getString(R.string.article_source_notes));
+            addMetadata(rows,notes,research);
+        }
+        addSectionHeading(rows,getString(R.string.article_sources));
+        addDetail(rows,entry.attribution());
+    }
+
+    private static boolean hasStudyAnswer(DictionaryRepository.Sense sense) {
+        return sense.translations().stream().anyMatch(word -> !word.trim().isEmpty());
     }
 
     private void updatePronunciationButton() {
@@ -685,8 +711,22 @@ public final class MainActivity extends AppCompatActivity {
         rows.addView(detail);
     }
 
+    private void addSectionHeading(LinearLayout rows,CharSequence title) {
+        TextView heading = (TextView)getLayoutInflater().inflate(R.layout.section_heading,rows,false);
+        heading.setText(title);
+        rows.addView(heading);
+    }
+
     private MaterialButton addAction(LinearLayout rows, CharSequence label, Runnable action) {
-        MaterialButton button = (MaterialButton) getLayoutInflater().inflate(R.layout.action_row,rows,false);
+        return addAction(rows,R.layout.action_row,label,action);
+    }
+
+    private MaterialButton addOutlineAction(LinearLayout rows,CharSequence label,Runnable action) {
+        return addAction(rows,R.layout.outline_action_row,label,action);
+    }
+
+    private MaterialButton addAction(LinearLayout rows,int layout,CharSequence label,Runnable action) {
+        MaterialButton button = (MaterialButton) getLayoutInflater().inflate(layout,rows,false);
         button.setText(label);
         button.setOnClickListener(v -> action.run());
         rows.addView(button);

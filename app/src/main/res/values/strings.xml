@@ -64,11 +64,17 @@
     <string name="dictionary_prompt">Введите запрос</string>
     <string name="dictionary_no_hits">Совпадений нет</string>
     <string name="dictionary_no_hits_help">Проверьте направление перевода и написание или введите начало слова.\n%1$s</string>
+    <string name="try_other_direction">Сменить направление перевода</string>
+    <string name="clear_search">Очистить запрос</string>
     <string name="dictionary_hits">Совпадения</string>
     <string name="dictionary_synthetic">Искусственный набор для проверки приложения</string>
     <string name="dictionary_synthetic_pos">%1$s\nИскусственный набор для проверки приложения</string>
     <string name="entry_unavailable">Статья недоступна в текущем пакете</string>
     <string name="sense_title">Значение %1$d</string>
+    <string name="article_meanings">Значения и переводы</string>
+    <string name="article_sense_examples">Примеры для этого значения</string>
+    <string name="article_source_notes">Материалы исходной статьи</string>
+    <string name="article_sources">Источники и лицензии</string>
     <string name="selected_sense">из результатов поиска</string>
     <string name="save_entry">Сохранить статью</string>
     <string name="pronounce_offline">Произнести локальным голосом</string>

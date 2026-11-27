@@ -42,6 +42,52 @@ public class RealResearchFlowTest {
     private static final String CUSTOM = "Личный вариант проверки";
     private static final String COLLECTION = "Подборка проверки";
 
+    @Test public void studiesSelectedMeaningFromRealArticleAndShowsProgress() throws Exception {
+        var target = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        assumeTrue("isolated Research profile required","app.lexiflow.researchcheck".equals(target.getPackageName()));
+        assertFalse(target.getDatabasePath("lexiflow-personal.sqlite").exists());
+        long launch = SystemClock.elapsedRealtime();
+        try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
+            awaitAvailable(scenario,120);
+            Log.i(TAG,"demonstration dictionary available ms="+(SystemClock.elapsedRealtime()-launch));
+            capture(scenario,"01-dictionary");
+            query("book");
+            awaitAvailable(scenario);
+            var hit = view(scenario).hits().stream()
+                    .filter(row -> "book".equals(row.spelling()) && "n".equals(row.pos()) && row.translation()!=null)
+                    .findFirst().orElseThrow(AssertionError::new);
+            String label = "book · n · " + target.getString(R.string.sense_title,hit.position())
+                    + "\n" + TranslationDisplay.wording(hit.translation());
+            capture(scenario,"02-results");
+            onView(withText(label)).perform(scrollTo(),click());
+            awaitAvailable(scenario);
+            var sense = view(scenario).entry().senses().stream().filter(row -> row.id().equals(hit.senseId()))
+                    .findFirst().orElseThrow(AssertionError::new);
+            capture(scenario,"03-entry");
+            onView(withText(target.getString(R.string.study_add_sense,sense.position()))).perform(scrollTo(),click());
+            await(scenario,state -> state.screen()==Screen.STUDY && state.exercise()!=null
+                    && state.exercise().entryId.equals(hit.entryId()),"real article opened its card");
+            capture(scenario,"06-review-front");
+            action(R.string.reveal);
+            String answer = TranslationDisplay.answer(String.join(" · ",sense.translations()),true,true);
+            onView(withId(R.id.body)).check(matches(withText(answer)));
+            scenario.recreate();
+            await(scenario,state -> state.screen()==Screen.STUDY && state.exercise()!=null,"real card restored");
+            onView(withId(R.id.body)).check(matches(withText(answer)));
+            capture(scenario,"07-review-answer");
+            String rating = target.getResources().getStringArray(R.array.review_ratings)[2];
+            onView(withText(startsWith(rating+" · "))).perform(scrollTo(),click());
+            await(scenario,state -> state.screen()==Screen.STUDY && state.exercise()==null,"real session finished");
+            onView(withId(R.id.panel_title)).check(matches(withText(R.string.review_session_finished)));
+            action(R.string.study_home);
+            await(scenario,state -> state.screen()==Screen.REVIEW && state.learning().nextDue!=null,"next review scheduled");
+            onView(withId(R.id.progress)).perform(click());
+            await(scenario,state -> state.screen()==Screen.PROGRESS && state.reviewed()==1
+                    && state.successful()==1 && state.savedCount()==1,"real progress updated");
+            capture(scenario,"08-progress");
+        }
+    }
+
     @Test public void usesRealDictionaryAndPersistsPersonalData() throws Exception {
         var target = InstrumentationRegistry.getInstrumentation().getTargetContext();
         assumeTrue(LocalDictionaryRepository.isResearchProfile(target));
@@ -804,7 +850,11 @@ public class RealResearchFlowTest {
     }
 
     private static void awaitAvailable(ActivityScenario<MainActivity> scenario) throws InterruptedException {
-        awaitDictionary(scenario,state -> state.status()!=DictionaryRepository.Status.LOADING,"research dictionary loaded");
+        awaitAvailable(scenario,40);
+    }
+
+    private static void awaitAvailable(ActivityScenario<MainActivity> scenario,int seconds) throws InterruptedException {
+        awaitDictionary(scenario,state -> state.status()!=DictionaryRepository.Status.LOADING,"research dictionary loaded",seconds);
         assertEquals(DictionaryRepository.Status.AVAILABLE,view(scenario).status());
         assertFalse(view(scenario).synthetic());
     }

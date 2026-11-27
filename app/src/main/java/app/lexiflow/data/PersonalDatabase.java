@@ -73,9 +73,17 @@ public abstract class PersonalDatabase extends RoomDatabase {
         public boolean reverse;
         public long due;
         public int intervalDays;
+        @NonNull public String entryId = "";
         @NonNull public String spelling = "";
         @NonNull public String answer = "";
         public boolean sourceAnswer;
+    }
+
+    public static class LearningCounts {
+        public int cards;
+        public int unstudied;
+        public int ready;
+        public Long nextDue;
     }
 
     @Dao
@@ -109,7 +117,41 @@ public abstract class PersonalDatabase extends RoomDatabase {
         @Insert(onConflict = OnConflictStrategy.IGNORE) public abstract long addCard(Card card);
         @Insert public abstract void addEvent(Event event);
 
-        @Query("SELECT c.id,c.reverse,c.due,c.intervalDays,s.spelling, CASE WHEN s.custom='' THEN s.answer ELSE s.custom END AS answer, "
+        @Query("SELECT id FROM saved WHERE entryId=:entry AND senseId=:sense")
+        abstract long savedId(String entry,String sense);
+
+        @Query("SELECT id FROM cards WHERE savedId=:saved AND reverse=0")
+        abstract long forwardCard(long saved);
+
+        @Transaction
+        public long learn(Saved item,long now) {
+            long saved = save(item);
+            var card = new Card();
+            card.savedId = saved == -1 ? savedId(item.entryId,item.senseId) : saved;
+            card.due = now;
+            long id = addCard(card);
+            return id == -1 ? forwardCard(card.savedId) : id;
+        }
+
+        private static final String STUDIED = "EXISTS (SELECT 1 FROM review_events e WHERE e.cardId=c.id)";
+        @Query("SELECT count(*) AS cards, count(CASE WHEN NOT "+STUDIED+" THEN 1 END) AS unstudied,"
+                + "count(CASE WHEN c.due<=:now AND "+STUDIED+" THEN 1 END) AS ready,"
+                + "min(CASE WHEN c.due>:now THEN c.due END) AS nextDue FROM cards c WHERE c.savedId IS NOT NULL")
+        public abstract LearningCounts learningCounts(long now);
+
+        @Query("SELECT c.id FROM cards c WHERE c.savedId IS NOT NULL AND c.due<=:now "
+                + "AND (:mode=0 OR (:mode=1 AND NOT "+STUDIED+") OR (:mode=2 AND "+STUDIED+")) "
+                + "AND (:collection=0 OR EXISTS (SELECT 1 FROM members m WHERE m.collectionId=:collection AND m.savedId=c.savedId)) "
+                + "ORDER BY c.due,c.id LIMIT :limit")
+        public abstract List<Long> learningQueue(long now,int mode,long collection,int limit);
+
+        private static final String EXERCISE = "SELECT c.id,c.reverse,c.due,c.intervalDays,s.entryId,s.spelling,"
+                + "CASE WHEN s.custom='' THEN s.answer ELSE s.custom END AS answer, s.custom='' AS sourceAnswer "
+                + "FROM cards c JOIN saved s ON s.id=c.savedId ";
+        @Query(EXERCISE+"WHERE c.id=:id AND c.due<=:now")
+        public abstract Exercise learningExercise(long id,long now);
+
+        @Query("SELECT c.id,c.reverse,c.due,c.intervalDays,s.entryId,s.spelling, CASE WHEN s.custom='' THEN s.answer ELSE s.custom END AS answer, "
                 + "s.custom='' AS sourceAnswer "
                 + "FROM cards c JOIN saved s ON s.id=c.savedId WHERE c.due<=:now ORDER BY c.due,c.id LIMIT 1")
         public abstract Exercise next(long now);

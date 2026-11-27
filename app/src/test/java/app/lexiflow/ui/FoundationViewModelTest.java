@@ -15,7 +15,7 @@ public class FoundationViewModelTest {
     }
 
     @Test public void settingsReturnsToEachDetailThenItsSection() {
-        for (Screen root : new Screen[]{Screen.SEARCH, Screen.VOCABULARY, Screen.REVIEW}) {
+        for (Screen root : new Screen[]{Screen.SEARCH, Screen.VOCABULARY}) {
             FoundationViewModel model = new FoundationViewModel(new SavedStateHandle());
             model.open(root);
             model.open(root.detail());
@@ -63,7 +63,7 @@ public class FoundationViewModelTest {
 
     @Test public void settingsReturnsToTheSectionThatOpenedIt() {
         FoundationViewModel model = new FoundationViewModel(new SavedStateHandle());
-        for (Screen section : new Screen[]{Screen.SEARCH, Screen.VOCABULARY, Screen.REVIEW}) {
+        for (Screen section : new Screen[]{Screen.SEARCH, Screen.VOCABULARY, Screen.REVIEW, Screen.PROGRESS}) {
             model.open(section);
             model.open(Screen.SETTINGS);
             assertEquals(Screen.SETTINGS, model.screen());
@@ -118,10 +118,12 @@ public class FoundationViewModelTest {
 
     @Test public void freshModelRestoresUnfinishedReviewAndPreviousSearchPosition() {
         SavedStateHandle state = new SavedStateHandle();
+        state.set("studyQueue",new long[]{9,11,15});
+        state.set("studyPosition",1);
         FoundationViewModel model = new FoundationViewModel(state);
         model.setQuery("demo");
         model.setSearchScroll(180);
-        model.open(Screen.REVIEW);
+        model.open(Screen.STUDY);
         model.recordReviewEvent(2);
         model.recordReviewEvent(0);
         var card = new app.lexiflow.data.PersonalDatabase.Exercise();
@@ -129,10 +131,15 @@ public class FoundationViewModelTest {
         card.due = 150;
         model.revealAnswer(card);
         FoundationViewModel restored = restore(state);
-        assertEquals(Screen.REVIEW,restored.screen());
+        assertEquals(Screen.STUDY,restored.screen());
+        assertEquals(1,restored.studyPosition());
+        assertEquals(3,restored.studyTotal());
+        assertTrue(restored.canResumeStudy());
         assertEquals(2,restored.sessionReviewed());
         assertEquals(1,restored.sessionSuccessful());
         assertTrue(restored.answerShown(card));
+        restored.back();
+        assertEquals(Screen.REVIEW,restored.screen());
         restored.back();
         assertEquals(Screen.SEARCH,restored.screen());
         assertEquals("demo",restored.query());

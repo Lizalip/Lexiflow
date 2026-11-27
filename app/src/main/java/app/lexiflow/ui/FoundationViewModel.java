@@ -34,13 +34,20 @@ public final class FoundationViewModel extends ViewModel {
     final MutableLiveData<DictionaryView> dictionaryView = new MutableLiveData<>();
     final MutableLiveData<LocalDictionaryRepository.ActivationStage> activation = new MutableLiveData<>();
     static final int PERSONAL_PAGE_SIZE = 50;
+    static final int STUDY_ALL = 0, STUDY_NEW = 1, STUDY_DUE = 2;
+    static final int STUDY_LIMIT = 20;
+    private static final long[] EMPTY_QUEUE = {};
     record PersonalView(Screen screen,long collection,int page,int rowCount,int savedCount,
                         boolean notesOnly,String savedQuery,boolean alphabetical,
                         List<PersonalDatabase.Saved> saved, Map<String,String> sourceLanguages, List<PersonalDatabase.Collection> collections,
-                        PersonalDatabase.Exercise exercise,int cards,int due,int reviewed,int successful) {}
+                        PersonalDatabase.Exercise exercise,int cards,int due,int reviewed,int successful,
+                        PersonalDatabase.LearningCounts learning) {}
     final MutableLiveData<PersonalView> personalView = new MutableLiveData<>();
     final MutableLiveData<Boolean> personalError = new MutableLiveData<>();
     final MutableLiveData<Integer> notice = new MutableLiveData<>();
+    final MutableLiveData<Boolean> studyNavigation = new MutableLiveData<>();
+    private boolean grading;
+    private boolean preparingStudy;
 
     public FoundationViewModel(SavedStateHandle state) {
         this.state = state;
@@ -116,12 +123,15 @@ public final class FoundationViewModel extends ViewModel {
         boolean notesOnly = target == Screen.VOCABULARY && notesOnly();
         boolean alphabetical = target == Screen.VOCABULARY && alphabetical();
         String savedQuery = target == Screen.VOCABULARY ? savedQuery() : "";
+        long[] queue = studyQueue();
+        int position = studyPosition();
         worker.execute(() -> {
             try {
                 PersonalDatabase.Library library = personal.library();
                 change.accept(library);
                 long now = System.currentTimeMillis();
-                int savedCount = target == Screen.VOCABULARY || target == Screen.PROGRESS ? library.savedCount() : 0;
+                int savedCount = target == Screen.VOCABULARY || target == Screen.PROGRESS || target == Screen.REVIEW
+                        ? library.savedCount() : 0;
                 String pattern = savedPattern(savedQuery);
                 boolean filtered = notesOnly || pattern != null;
                 int rowCount = target == Screen.VOCABULARY
@@ -135,23 +145,33 @@ public final class FoundationViewModel extends ViewModel {
                                 : library.savedPage(PERSONAL_PAGE_SIZE,offset))
                         : target == Screen.COLLECTIONS && collection != 0
                         ? library.collectionPage(collection,PERSONAL_PAGE_SIZE,offset) : Collections.emptyList();
+                int next = position;
+                PersonalDatabase.Exercise card = null;
+                if (target == Screen.STUDY) {
+                    while (next < queue.length && (card = library.learningExercise(queue[next],now)) == null) next++;
+                }
+                final int nextPosition = next;
+                var entryIds = saved.stream().map(row -> row.entryId).collect(java.util.stream.Collectors.toSet());
+                if (card != null) entryIds.add(card.entryId);
                 var snapshot = new PersonalView(target,collection,page,rowCount,savedCount,notesOnly,savedQuery,alphabetical,saved,
-                        dictionary.sourceLanguages(saved.stream().map(row -> row.entryId)
-                                .collect(java.util.stream.Collectors.toSet())),
-                        target == Screen.VOCABULARY || target == Screen.COLLECTIONS || target == Screen.PROGRESS
+                        dictionary.sourceLanguages(entryIds),
+                        target == Screen.VOCABULARY || target == Screen.COLLECTIONS || target == Screen.PROGRESS || target == Screen.REVIEW
                                 ? library.collections() : Collections.emptyList(),
-                        target == Screen.REVIEW ? library.next(now) : null,
+                        card,
                         target == Screen.PROGRESS ? library.cardCount() : 0,
                         target == Screen.PROGRESS ? library.dueCount(now) : 0,
                         target == Screen.PROGRESS ? library.reviewCount() : 0,
-                        target == Screen.PROGRESS ? library.successCount() : 0);
+                        target == Screen.PROGRESS ? library.successCount() : 0,
+                        target == Screen.REVIEW ? library.learningCounts(now) : null);
                 main.post(() -> {
                     if (disposed || target != screen() || collection != collection()
                             || requestedPage != personalPage(target)
                             || (target == Screen.VOCABULARY
                             && (notesOnly != notesOnly() || alphabetical != alphabetical()
                             || !savedQuery.equals(savedQuery())))) return;
-                    if (target == Screen.REVIEW) {
+                    if (target == Screen.STUDY) {
+                        if (queue != studyQueue() || position != studyPosition()) return;
+                        state.set("studyPosition",nextPosition);
                         if (snapshot.exercise() == null && sessionReviewed() > 0) {
                             state.set("reviewSessionFinished",true);
                         }
@@ -167,6 +187,80 @@ public final class FoundationViewModel extends ViewModel {
     }
 
     void save(DictionaryRepository.Entry entry, DictionaryRepository.Sense sense) {
+        var item = savedItem(entry,sense);
+        changePersonal(library -> notifyResult(library.save(item) == -1 ? R.string.already_saved : R.string.saved_notice));
+    }
+
+    void learn(DictionaryRepository.Entry entry,DictionaryRepository.Sense sense) {
+        if (worker == null || preparingStudy || grading) return;
+        var item = savedItem(entry,sense);
+        if (item.answer.trim().isEmpty()) return;
+        prepareStudy(STUDY_NEW,library -> {
+            long now = System.currentTimeMillis();
+            long card = library.learn(item,now);
+            return library.learningExercise(card,now) == null ? EMPTY_QUEUE : new long[] {card};
+        },R.string.study_already_scheduled);
+    }
+
+    void startStudy(int mode,long collection) {
+        if (worker == null || preparingStudy || grading) return;
+        prepareStudy(mode, library -> library.learningQueue(System.currentTimeMillis(),mode,collection,STUDY_LIMIT)
+                .stream().mapToLong(Long::longValue).toArray(),R.string.study_none_available);
+    }
+
+    private void prepareStudy(int mode,java.util.function.Function<PersonalDatabase.Library,long[]> lookup,int emptyMessage) {
+        Screen origin = screen();
+        int originRequest = request;
+        long originCollection = collection();
+        preparingStudy = true;
+        worker.execute(() -> {
+            try {
+                long[] queue = lookup.apply(personal.library());
+                main.post(() -> {
+                    preparingStudy = false;
+                    if (disposed || origin != screen() || request != originRequest || originCollection != collection()) return;
+                    if (queue.length == 0) {
+                        notice.setValue(emptyMessage);
+                        if (origin == Screen.ENTRY) navigateStudy(Screen.REVIEW);
+                        else refreshPersonal();
+                        return;
+                    }
+                    state.set("studyQueue",queue);
+                    state.set("studyPosition",0);
+                    state.set("studyMode",mode);
+                    state.set("reviewSessionCount",0);
+                    state.set("reviewSessionSuccess",0);
+                    state.set("reviewSessionFinished",false);
+                    state.remove("revealedCard");
+                    state.remove("revealedCardDue");
+                    navigateStudy(Screen.STUDY);
+                });
+            } catch (RuntimeException failure) {
+                main.post(() -> {
+                    preparingStudy = false;
+                    if (!disposed) personalError.setValue(true);
+                });
+            }
+        });
+    }
+
+    private void navigateStudy(Screen target) {
+        open(target);
+        studyNavigation.setValue(true);
+    }
+
+    private long[] studyQueue() {
+        long[] queue = state.get("studyQueue");
+        return queue == null ? EMPTY_QUEUE : queue;
+    }
+
+    int studyPosition() { return sessionCount("studyPosition"); }
+    int studyTotal() { return studyQueue().length; }
+    int studyMode() { return sessionCount("studyMode"); }
+    boolean canResumeStudy() { return studyPosition() < studyTotal(); }
+    boolean grading() { return grading; }
+
+    private PersonalDatabase.Saved savedItem(DictionaryRepository.Entry entry,DictionaryRepository.Sense sense) {
         var item = new PersonalDatabase.Saved();
         item.entryId = entry.id();
         item.senseId = sense == null ? "" : sense.id();
@@ -174,7 +268,7 @@ public final class FoundationViewModel extends ViewModel {
         item.answer = sense == null ? String.join(" · ",entry.senses().stream()
                 .flatMap(value -> value.translations().stream()).distinct().collect(java.util.stream.Collectors.toList()))
                 : String.join(" · ",sense.translations());
-        changePersonal(library -> notifyResult(library.save(item) == -1 ? R.string.already_saved : R.string.saved_notice));
+        return item;
     }
 
     void edit(long id,String translation,String note) {
@@ -290,9 +384,30 @@ public final class FoundationViewModel extends ViewModel {
         state.set("revealedCardDue",exercise.due);
     }
     void grade(PersonalDatabase.Exercise exercise,int rating) {
-        changePersonal(library -> {
-            if (library.grade(exercise,rating,System.currentTimeMillis(),ReviewScheduler::basic)) {
-                main.post(() -> { if (!disposed) recordReviewEvent(rating); });
+        long[] queue = studyQueue();
+        int position = studyPosition();
+        if (worker == null || grading || screen() != Screen.STUDY
+                || position >= queue.length || queue[position] != exercise.id || !answerShown(exercise)) return;
+        grading = true;
+        worker.execute(() -> {
+            try {
+                boolean saved = personal.library().grade(exercise,rating,System.currentTimeMillis(),ReviewScheduler::basic);
+                main.post(() -> {
+                    grading = false;
+                    if (disposed) return;
+                    if (saved && queue == studyQueue()) {
+                        recordReviewEvent(rating);
+                        state.set("studyPosition",position+1);
+                    }
+                    refreshPersonal();
+                });
+            } catch (RuntimeException failure) {
+                main.post(() -> {
+                    grading = false;
+                    if (disposed) return;
+                    personalError.setValue(true);
+                    refreshPersonal();
+                });
             }
         });
     }

@@ -110,6 +110,8 @@ public class IsolatedPersonalFlowTest {
             back();
             back();
             onView(withId(R.id.review)).perform(click());
+            await(scenario,state -> state.screen() == Screen.REVIEW && state.learning().unstudied == 2,"new cards counted");
+            onView(withText(context.getString(R.string.study_new_count,2))).perform(scrollTo(),click());
             await(scenario,state -> state.exercise() != null && !state.exercise().reverse,"forward exercise");
             onView(withId(R.id.panel_title)).check(matches(withText("zeta-demo")));
             capture(scenario,"06-review-front");
@@ -119,16 +121,17 @@ public class IsolatedPersonalFlowTest {
             await(scenario,state -> state.exercise() != null && !state.exercise().reverse,"revealed exercise restored");
             onView(withId(R.id.body)).check(matches(withText(custom)));
             capture(scenario,"07-review-answer");
-            onView(withText(ratings[1])).perform(scrollTo(),click());
+            onView(withText(startsWith(ratings[1]+" · "))).perform(scrollTo(),click());
             await(scenario,state -> state.exercise() != null && state.exercise().reverse,"reverse exercise");
             onView(withId(R.id.panel_title)).check(matches(withText(custom)));
             action(R.string.reveal);
             onView(withId(R.id.body)).check(matches(withText("zeta-demo")));
-            onView(withText(ratings[2])).perform(scrollTo(),click());
-            await(scenario,state -> state.screen() == Screen.REVIEW && state.exercise() == null,"review queue completed");
+            onView(withText(startsWith(ratings[2]+" · "))).perform(scrollTo(),click());
+            await(scenario,state -> state.screen() == Screen.STUDY && state.exercise() == null,"review queue completed");
             onView(withId(R.id.panel_title)).check(matches(withText(R.string.review_session_finished)));
             onView(withId(R.id.body)).check(matches(withText(context.getString(R.string.review_session_summary,2,2,0))));
-            onView(withId(R.id.action)).perform(scrollTo(),click());
+            action(R.string.study_home);
+            onView(withId(R.id.progress)).perform(click());
             await(scenario,state -> state.screen() == Screen.PROGRESS && state.reviewed() == 2
                     && state.successful() == 2,"reviews counted");
             capture(scenario,"08-progress");

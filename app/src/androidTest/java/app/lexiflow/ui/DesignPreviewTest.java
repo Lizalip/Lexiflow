@@ -14,6 +14,7 @@ import static app.lexiflow.ui.IsolatedPersonalFlowTest.await;
 import static app.lexiflow.ui.IsolatedPersonalFlowTest.capture;
 import static androidx.test.espresso.Espresso.onView;
 import static androidx.test.espresso.action.ViewActions.*;
+import static androidx.test.espresso.assertion.ViewAssertions.matches;
 import static androidx.test.espresso.matcher.ViewMatchers.*;
 import static org.hamcrest.Matchers.startsWith;
 import static org.junit.Assert.*;
@@ -97,16 +98,29 @@ public class DesignPreviewTest {
             onView(withContentDescription(R.string.back)).perform(click());
             onView(withContentDescription(R.string.back)).perform(click());
             onView(withId(R.id.review)).perform(click());
-            await(scenario,state -> state.screen() == Screen.REVIEW && state.exercise() != null,"preview card");
+            await(scenario,state -> state.screen() == Screen.REVIEW && state.learning().unstudied > 0,"preview learning");
+            onView(withText(startsWith("Учить новые слова"))).perform(scrollTo(),click());
+            await(scenario,state -> state.screen() == Screen.STUDY && state.exercise() != null,"preview card");
             capture(scenario,"06-review-front");
             onView(withText(R.string.reveal)).perform(scrollTo(),click());
             capture(scenario,"07-review-answer");
-            onView(withId(R.id.action)).perform(scrollTo(),click());
+            onView(withContentDescription(R.string.back)).perform(click());
+            onView(withId(R.id.progress)).perform(click());
             await(scenario,state -> state.screen() == Screen.PROGRESS && state.reviewed() == 1,"preview statistics");
             capture(scenario,"08-progress");
             onView(withId(R.id.settings)).perform(click());
             NavigationTest.awaitDictionary(scenario);
             capture(scenario,"09-settings");
+            onView(withContentDescription(R.string.back)).perform(click());
+            onView(withId(R.id.search)).perform(click());
+            NavigationTest.awaitDictionary(scenario);
+            onView(withText(startsWith(HEADWORD+" · noun · Значение 1"))).perform(scrollTo(),click());
+            NavigationTest.awaitDictionary(scenario);
+            onView(withText(target.getString(R.string.study_add_sense,1))).perform(scrollTo(),click());
+            await(scenario,state -> state.screen() == Screen.STUDY && state.exercise() != null
+                    && !state.exercise().reverse && HEADWORD.equals(state.exercise().spelling),"article starts exact card");
+            onView(withText(R.string.reveal)).perform(scrollTo(),click());
+            onView(withId(R.id.body)).check(matches(withText("Личный вариант для макета")));
         }
     }
 }

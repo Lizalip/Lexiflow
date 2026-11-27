@@ -21,6 +21,7 @@ import app.lexiflow.R;
 import app.lexiflow.data.DictionaryRepository;
 import app.lexiflow.data.LocalDictionaryRepository;
 import app.lexiflow.data.PersonalDatabase;
+import app.lexiflow.data.ReviewScheduler;
 import com.google.android.material.appbar.MaterialToolbar;
 import com.google.android.material.bottomnavigation.BottomNavigationView;
 import com.google.android.material.button.MaterialButton;
@@ -87,7 +88,8 @@ public final class MainActivity extends AppCompatActivity {
         });
         navigation.setOnItemSelectedListener(item -> {
             int id = item.getItemId();
-            open(id == R.id.search ? Screen.SEARCH : id == R.id.review ? Screen.REVIEW : Screen.VOCABULARY);
+            open(id == R.id.search ? Screen.SEARCH : id == R.id.review ? Screen.REVIEW
+                    : id == R.id.progress ? Screen.PROGRESS : Screen.VOCABULARY);
             return true;
         });
         toolbar.setOnMenuItemClickListener(item -> {
@@ -110,6 +112,12 @@ public final class MainActivity extends AppCompatActivity {
             if (view != null && view.status() == DictionaryRepository.Status.LOADING) renderDictionary();
         });
         model.personalView.observe(this, view -> renderPersonal());
+        model.studyNavigation.observe(this, changed -> {
+            if (Boolean.TRUE.equals(changed)) {
+                model.studyNavigation.setValue(false);
+                render();
+            }
+        });
         model.personalError.observe(this, error -> {
             if (Boolean.TRUE.equals(error)) {
                 Toast.makeText(this,R.string.personal_error,Toast.LENGTH_SHORT).show();
@@ -153,7 +161,8 @@ public final class MainActivity extends AppCompatActivity {
         toolbar.getMenu().findItem(R.id.settings).setVisible(screen != Screen.SETTINGS);
         navigation.setVisibility(nested ? View.GONE : View.VISIBLE);
         if (!nested) {
-            int id = screen == Screen.SEARCH ? R.id.search : screen == Screen.REVIEW ? R.id.review : R.id.vocabulary;
+            int id = screen == Screen.SEARCH ? R.id.search : screen == Screen.REVIEW ? R.id.review
+                    : screen == Screen.PROGRESS ? R.id.progress : R.id.vocabulary;
             navigation.getMenu().findItem(id).setChecked(true);
         }
         ((TextView) findViewById(R.id.title)).setText(screen.title);
@@ -329,6 +338,9 @@ public final class MainActivity extends AppCompatActivity {
                         sense.context().text(),sense.context().attribution()));
                 rows.addView(context);
             }
+            if (sense.translations().stream().anyMatch(word -> !word.trim().isEmpty())) {
+                addAction(rows,getString(R.string.study_add_sense,sense.position()),() -> model.learn(entry,sense));
+            }
             addAction(rows,getString(R.string.save_sense,sense.position()),() -> model.save(entry,sense));
         }
         if (research) addMetadata(rows,entry.metadata().stream().filter(value -> !primaryArticleMetadata(value))
@@ -433,7 +445,8 @@ public final class MainActivity extends AppCompatActivity {
                     }
                 }
             }
-            case REVIEW -> renderExercise(rows,heading,body,state.exercise());
+            case REVIEW -> renderLearning(rows,heading,body,state);
+            case STUDY -> renderExercise(rows,heading,body,state.exercise());
             case PROGRESS -> {
                 if (state.savedCount() == 0 && state.collections().isEmpty() && state.reviewed() == 0) return;
                 heading.setText(R.string.progress);
@@ -549,6 +562,10 @@ public final class MainActivity extends AppCompatActivity {
                                   PersonalDatabase.Collection collection,FoundationViewModel.PersonalView state) {
         heading.setText(collection.name);
         body.setText(R.string.collection_items);
+        if (state.rowCount() > 0) {
+            addAction(rows,getString(R.string.study_collection),() ->
+                    model.startStudy(FoundationViewModel.STUDY_ALL,collection.id));
+        }
         addAction(rows,getString(R.string.rename_collection),() -> collectionName(collection));
         addAction(rows,getString(R.string.delete_collection),() -> new MaterialAlertDialogBuilder(this)
                 .setTitle(R.string.confirm_delete_collection)
@@ -597,6 +614,33 @@ public final class MainActivity extends AppCompatActivity {
         model.changePersonal(library -> library.addCard(card));
     }
 
+    private void renderLearning(LinearLayout rows,TextView heading,TextView body,FoundationViewModel.PersonalView state) {
+        var learning = state.learning();
+        if (model.canResumeStudy()) {
+            addAction(rows,getString(R.string.study_resume),() -> open(Screen.STUDY));
+        }
+        if (learning.cards == 0) {
+            addAction(rows,getString(state.savedCount() == 0 ? R.string.study_find_word : R.string.study_open_saved),
+                    () -> open(state.savedCount() == 0 ? Screen.SEARCH : Screen.VOCABULARY));
+            body.setText(state.savedCount() == 0 ? R.string.study_first_from_dictionary : R.string.study_first_from_saved);
+            return;
+        }
+        heading.setText(R.string.study_today);
+        body.setText(R.string.study_today_body);
+        addStudyAction(rows,R.string.study_new_count,learning.unstudied,FoundationViewModel.STUDY_NEW);
+        addStudyAction(rows,R.string.study_due_count,learning.ready,FoundationViewModel.STUDY_DUE);
+        if (learning.nextDue != null) {
+            String date = java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.MEDIUM,
+                    java.text.DateFormat.SHORT).format(new java.util.Date(learning.nextDue));
+            addDetail(rows,getString(R.string.study_next_date,date));
+        }
+        addAction(rows,getString(R.string.open_collections),() -> open(Screen.COLLECTIONS));
+    }
+
+    private void addStudyAction(LinearLayout rows,int label,int count,int mode) {
+        addAction(rows,getString(label,count),() -> model.startStudy(mode,0)).setEnabled(count > 0);
+    }
+
     private void renderExercise(LinearLayout rows,TextView heading,TextView body,PersonalDatabase.Exercise exercise) {
         if (exercise == null) {
             int reviewed = model.sessionReviewed();
@@ -604,9 +648,14 @@ public final class MainActivity extends AppCompatActivity {
                 heading.setText(R.string.review_session_finished);
                 body.setText(getString(R.string.review_session_summary,reviewed,model.sessionSuccessful(),
                         reviewed-model.sessionSuccessful()));
+            } else {
+                heading.setText(R.string.no_review);
+                body.setText(R.string.study_none_available);
             }
+            addAction(rows,getString(R.string.study_home),() -> open(Screen.REVIEW));
             return;
         }
+        addDetail(rows,getString(R.string.study_position,model.studyPosition()+1,model.studyTotal()));
         String answer = TranslationDisplay.answer(exercise.answer,exercise.sourceAnswer,
                 LocalDictionaryRepository.isResearchProfile(this));
         heading.setText(exercise.reverse ? answer : exercise.spelling);
@@ -619,8 +668,21 @@ public final class MainActivity extends AppCompatActivity {
         String[] choices = getResources().getStringArray(R.array.review_ratings);
         for (int i = 0; i < choices.length; i++) {
             int rating = i;
-            addAction(rows,choices[i],() -> { rows.removeAllViews(); model.grade(exercise,rating); });
+            var next = ReviewScheduler.basic(exercise.intervalDays,rating,0);
+            String wait = next.days() == 0
+                    ? getString(R.string.study_minutes,next.due()/60_000)
+                    : getString(R.string.study_days,next.days());
+            addAction(rows,getString(R.string.study_rating_with_interval,choices[i],wait),() -> {
+                model.grade(exercise,rating);
+                renderPersonal();
+            }).setEnabled(!model.grading());
         }
+    }
+
+    private void addDetail(LinearLayout rows,CharSequence text) {
+        TextView detail = inflateArticleDetail(rows);
+        detail.setText(text);
+        rows.addView(detail);
     }
 
     private MaterialButton addAction(LinearLayout rows, CharSequence label, Runnable action) {
@@ -656,7 +718,8 @@ public final class MainActivity extends AppCompatActivity {
 
     @Override protected void onResume() {
         super.onResume();
-        if (model.screen() == Screen.REVIEW || model.screen() == Screen.PROGRESS) model.refreshPersonal();
+        if (model.screen() == Screen.REVIEW || model.screen() == Screen.PROGRESS
+                || model.screen() == Screen.STUDY) model.refreshPersonal();
     }
 
     @Override protected void onDestroy() {

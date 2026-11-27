@@ -111,19 +111,22 @@ public class RealResearchFlowTest {
             back();
             back();
             onView(withId(R.id.review)).perform(click());
+            await(scenario,state -> state.screen() == Screen.REVIEW && state.learning().unstudied == 2,"new cards counted");
+            onView(withText(target.getString(R.string.study_new_count,2))).perform(scrollTo(),click());
             await(scenario,state -> state.exercise()!=null && !state.exercise().reverse,"forward card");
             capture(scenario,"06-review-front");
             action(R.string.reveal);
             onView(withId(R.id.body)).check(matches(withText(CUSTOM)));
             capture(scenario,"07-review-answer");
             String[] grades = target.getResources().getStringArray(R.array.review_ratings);
-            onView(withText(grades[1])).perform(scrollTo(),click());
+            onView(withText(startsWith(grades[1]+" · "))).perform(scrollTo(),click());
             await(scenario,state -> state.exercise()!=null && state.exercise().reverse,"reverse card");
             action(R.string.reveal);
             onView(withId(R.id.body)).check(matches(withText("book")));
-            onView(withText(grades[2])).perform(scrollTo(),click());
-            await(scenario,state -> state.screen()==Screen.REVIEW && state.exercise()==null,"cards graded");
-            onView(withId(R.id.action)).perform(scrollTo(),click());
+            onView(withText(startsWith(grades[2]+" · "))).perform(scrollTo(),click());
+            await(scenario,state -> state.screen()==Screen.STUDY && state.exercise()==null,"cards graded");
+            action(R.string.study_home);
+            onView(withId(R.id.progress)).perform(click());
             await(scenario,state -> state.screen()==Screen.PROGRESS && state.reviewed()==2,"statistics updated");
             capture(scenario,"08-progress");
             onView(withId(R.id.settings)).perform(click());
@@ -216,17 +219,20 @@ public class RealResearchFlowTest {
                 onView(withText(actions[index])).perform(click());
             }
             onView(withId(R.id.review)).perform(click());
+            await(scenario,state -> state.screen() == Screen.REVIEW && state.learning().unstudied == 2,"new cards counted");
+            onView(withText(target.getString(R.string.study_new_count,2))).perform(scrollTo(),click());
             await(scenario,state -> state.exercise()!=null && !state.exercise().reverse,"direct card unlocked");
             action(R.string.reveal);
             onView(withId(R.id.body)).check(matches(withText("Local trial gloss")));
             String[] grades = target.getResources().getStringArray(R.array.review_ratings);
-            onView(withText(grades[1])).perform(scrollTo(),click());
+            onView(withText(startsWith(grades[1]+" · "))).perform(scrollTo(),click());
             await(scenario,state -> state.exercise()!=null && state.exercise().reverse,"inverse card unlocked");
             action(R.string.reveal);
             onView(withId(R.id.body)).check(matches(withText(word)));
-            onView(withText(grades[2])).perform(scrollTo(),click());
-            await(scenario,state -> state.screen()==Screen.REVIEW && state.exercise()==null,"both directions graded");
-            onView(withId(R.id.action)).perform(scrollTo(),click());
+            onView(withText(startsWith(grades[2]+" · "))).perform(scrollTo(),click());
+            await(scenario,state -> state.screen()==Screen.STUDY && state.exercise()==null,"both directions graded");
+            action(R.string.study_home);
+            onView(withId(R.id.progress)).perform(click());
             await(scenario,state -> state.screen()==Screen.PROGRESS && state.reviewed()==4 && state.cards()==4,
                     "both languages retain review history");
         }

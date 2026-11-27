@@ -6,6 +6,7 @@ enum Screen {
     SEARCH(R.string.dictionary, R.string.no_corpus, R.string.no_corpus_body, R.string.open_entry),
     VOCABULARY(R.string.vocabulary, R.string.no_words, R.string.no_words_body, R.string.open_collections),
     REVIEW(R.string.review, R.string.no_review, R.string.no_review_body, R.string.open_progress),
+    STUDY(R.string.study_session, R.string.study_loading, R.string.study_loading_body, 0),
     ENTRY(R.string.entry, R.string.no_entry, R.string.no_entry_body, 0),
     COLLECTIONS(R.string.collections, R.string.no_collections, R.string.no_collections_body, 0),
     PROGRESS(R.string.progress, R.string.no_progress, R.string.no_progress_body, 0),
@@ -36,7 +37,7 @@ enum Screen {
         return switch (this) {
             case ENTRY -> SEARCH;
             case COLLECTIONS -> VOCABULARY;
-            case PROGRESS -> REVIEW;
+            case STUDY -> REVIEW;
             default -> this;
         };
     }

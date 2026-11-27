@@ -148,13 +148,13 @@ public class NavigationTest {
         }
     }
 
-    @Test public void settingsReturnsToProgressThenBackToReview() throws InterruptedException {
+    @Test public void settingsReturnsToProgressAndKeepsPrimaryNavigation() throws InterruptedException {
         try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
             onView(withId(R.id.review)).perform(click());
             assertToolbarIcon(scenario,false);
-            onView(withId(R.id.action)).perform(scrollTo(), click());
+            onView(withId(R.id.progress)).perform(click());
             onView(withId(R.id.title)).check(matches(withText(R.string.progress)));
-            assertToolbarIcon(scenario,true);
+            assertToolbarIcon(scenario,false);
             onView(withId(R.id.settings)).perform(click());
             onView(withId(R.id.title)).check(matches(withText(R.string.settings)));
             assertToolbarIcon(scenario,true);
@@ -163,8 +163,8 @@ public class NavigationTest {
                     withText(R.string.no_installed_dictionary),withText(R.string.dictionary_available))));
             onView(withContentDescription(R.string.back)).perform(click());
             onView(withId(R.id.title)).check(matches(withText(R.string.progress)));
-            assertToolbarIcon(scenario,true);
-            onView(withContentDescription(R.string.back)).perform(click());
+            assertToolbarIcon(scenario,false);
+            onView(withId(R.id.review)).perform(click());
             onView(withId(R.id.title)).check(matches(withText(R.string.review)));
             assertToolbarIcon(scenario,false);
             onView(withId(R.id.navigation)).check(matches(isDisplayed()));
